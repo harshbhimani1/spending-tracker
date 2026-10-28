@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spending Tracker</title>
+<style>
+  :root {
+    --bg: #f6f4ff;
+    --card: #ffffff;
+    --text: #2d2a3e;
+    --muted: #756f8f;
+    --line: #ebe8f7;
+    --accent: #6c5ce7;
+    --accent-soft: #eeebff;
+    --on-accent: #ffffff;
+    --good: #00875f;
+    --bad: #d9363e;
+    --shadow: 0 6px 24px rgba(80, 60, 160, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16141f;
+      --card: #1f1c2d;
+      --text: #f1effa;
+      --muted: #a8a4c0;
+      --line: #322e48;
+      --accent: #8b7df0;
+      --accent-soft: #2c2754;
+      --on-accent: #14111f;
+      --good: #3ddc9f;
+      --bad: #ff7b80;
+      --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.45 ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.02em; }
+  h2 { font-size: 1.05rem; margin: 0 0 14px; }
+  button, input, select { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+
+  header { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .month-picker { display: flex; align-items: center; gap: 6px; background: var(--card); border-radius: 999px; padding: 4px; box-shadow: var(--shadow); }
+  .month-picker span { min-width: 9.5em; text-align: center; font-weight: 600; }
+  .icon-btn { border: 0; background: var(--accent-soft); color: var(--accent); width: 36px; height: 36px; border-radius: 50%; font-size: 1.2rem; cursor: pointer; }
+  .icon-btn:disabled { opacity: 0.35; cursor: default; }
+
+  .tabs { display: flex; gap: 8px; margin-bottom: 20px; overflow-x: auto; }
+  .tab { border: 0; background: var(--card); color: var(--muted); padding: 9px 20px; border-radius: 999px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); white-space: nowrap; }
+  .tab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+
+  .card { background: var(--card); border-radius: 22px; padding: 20px; box-shadow: var(--shadow); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .stat .label { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
+  .stat .value { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; margin-top: 4px; overflow-wrap: anywhere; }
+  .stat .note { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+  .stat.hero { background: var(--accent); }
+  .stat.hero .label, .stat.hero .note, .stat.hero .value { color: var(--on-accent); }
+  .up { color: var(--bad); font-weight: 700; }
+  .down { color: var(--good); font-weight: 700; }
+
+  .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 760px) { .grid-2 { grid-template-columns: minmax(0, 1fr); } }
+  .chart-box { position: relative; height: 280px; }
+  .chart-box.tall { height: 380px; }
+
+  .cat-list { list-style: none; margin: 0; padding: 0; }
+  .cat-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 8px; border: 0; background: none; border-radius: 12px; cursor: pointer; text-align: left; }
+  .cat-row:hover { background: var(--accent-soft); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .cat-row .name { flex: 1; font-weight: 600; }
+  .cat-row .pct { color: var(--muted); font-size: 0.85rem; }
+  .hint { color: var(--muted); font-size: 0.85rem; margin: 10px 0 0; }
+
+  .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .account-row:first-of-type { border-top: 0; }
+  .account-row .acct-name { flex: 1; min-width: 12em; font-weight: 600; }
+  .account-row .acct-sub { color: var(--muted); font-size: 0.85rem; font-weight: 400; }
+  .account-row input { flex: 1; min-width: 12em; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); }
+  .btn { border: 0; border-radius: 999px; padding: 7px 16px; font-weight: 600; cursor: pointer; background: var(--accent-soft); color: var(--accent); }
+  .btn.primary { background: var(--accent); color: var(--on-accent); }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+  .toolbar input, .toolbar select { padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
+  .toolbar input { flex: 1; min-width: 12em; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  th, td { text-align: left; padding: 11px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; user-select: none; }
+  th[aria-sort] { color: var(--accent); }
+  td.amount, th.amount { text-align: right; font-variant-numeric: tabular-nums; }
+  tfoot td { font-weight: 700; border-bottom: 0; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; background: var(--accent-soft); font-size: 0.85rem; font-weight: 600; }
+  .badge { margin-left: 6px; font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+  .error { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Spending Tracker</h1>
+    <div class="month-picker" id="month-picker" hidden>
+      <button class="icon-btn" id="prev-month" aria-label="Previous month">‹</button>
+      <span id="month-label"></span>
+      <button class="icon-btn" id="next-month" aria-label="Next month">›</button>
+    </div>
+  </header>
+
+  <div id="empty" class="card empty" hidden>
+    No transactions yet. Run <code>python get_transactions.py</code> from <code>backend/</code>, then reload.
+  </div>
+
+  <div id="app" hidden>
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+      <button class="tab" role="tab" data-tab="transactions" aria-selected="false">Transactions</button>
+      <button class="tab" role="tab" data-tab="trends" aria-selected="false">Trends</button>
+    </nav>
+
+    <section id="tab-overview">
+      <div class="cards" id="cards"></div>
+      <div class="grid-2">
+        <div class="card">
+          <h2>Spending by category</h2>
+          <div class="chart-box"><canvas id="category-chart"></canvas></div>
+        </div>
+        <div class="card">
+          <h2>Categories</h2>
+          <ul class="cat-list" id="category-list"></ul>
+          <p class="hint">Click a category to see its transactions.</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Cards</h2>
+        <div id="accounts"></div>
+      </div>
+    </section>
+
+    <section id="tab-transactions" hidden>
+      <div class="card">
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Search merchant…" aria-label="Search merchant">
+          <select id="category-filter" aria-label="Filter by category"></select>
+          <select id="account-filter" aria-label="Filter by card"></select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr id="table-head"></tr></thead>
+            <tbody id="table-body"></tbody>
+            <tfoot id="table-foot"></tfoot>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-trends" hidden>
+      <div class="card">
+        <h2>Monthly spending by category</h2>
+        <div class="chart-box tall"><canvas id="trend-chart"></canvas></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const PALETTE = ["#6c5ce7", "#00b894", "#ff7675", "#fdcb6e", "#0984e3", "#e84393",
+                 "#00cec9", "#e17055", "#a29bfe", "#55efc4", "#74b9fd", "#fab1a0"];
+
+const state = {
+  months: [], monthIndex: 0, accounts: [], trend: null,
+  overview: null, transactions: [],
+  tab: "overview", editing: null,
+  filters: { search: "", category: "", account: "" },
+  sort: { key: "date", dir: "desc" },
+};
+const TABS = ["overview", "transactions", "trends"];
+const colors = {};
+const charts = {};
+
+const $ = (selector) => document.querySelector(selector);
+const money = (cents) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const esc = (text) => String(text).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const prettyCategory = (raw) => raw.toLowerCase().replace(/_and_/g, " & ").replace(/_/g, " ")
+  .replace(/\b[a-z]/g, (c) => c.toUpperCase());
+const monthName = (month, style = "long") => {
+  const [year, number] = month.split("-").map(Number);
+  return new Date(year, number - 1, 1).toLocaleDateString("en-US", { month: style, year: "numeric" });
+};
+const colorFor = (category) => {
+  if (!(category in colors)) colors[category] = PALETTE[Object.keys(colors).length % PALETTE.length];
+  return colors[category];
+};
+const accountLabel = (id) => (state.accounts.find((a) => a.account_id === id) || {}).label || "Unknown card";
+const currentMonth = () => state.months[state.monthIndex];
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+async function getJson(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error(`${url} failed (${response.status})`);
+  return response.json();
+}
+
+// ---- Loading ---------------------------------------------------------
+
+async function init() {
+  try {
+    const [months, accounts, trend] = await Promise.all([
+      getJson("/api/months"), getJson("/api/accounts"), getJson("/api/trend"),
+    ]);
+    state.months = months.months;
+    state.accounts = accounts.accounts;
+    state.trend = trend;
+    trend.categories.forEach(colorFor);
+    if (!state.months.length) { $("#empty").hidden = false; return; }
+    state.monthIndex = state.months.length - 1;
+    $("#month-picker").hidden = false;
+    $("#app").hidden = false;
+    await loadMonth();
+    const hashTab = location.hash.slice(1);
+    if (TABS.includes(hashTab)) showTab(hashTab);
+  } catch (error) {
+    $("#empty").hidden = false;
+    $("#empty").innerHTML = `<span class="error">Could not load data: ${esc(error.message)}</span>`;
+  }
+}
+
+async function loadMonth() {
+  const month = currentMonth();
+  $("#month-label").textContent = monthName(month);
+  $("#prev-month").disabled = state.monthIndex === 0;
+  $("#next-month").disabled = state.monthIndex === state.months.length - 1;
+  const [overview, transactions] = await Promise.all([
+    getJson(`/api/overview?month=${month}`), getJson(`/api/transactions?month=${month}`),
+  ]);
+  state.overview = overview;
+  state.transactions = transactions.transactions;
+  renderAll();
+}
+
+// ---- Rendering -------------------------------------------------------
+
+function renderAll() {
+  renderCards();
+  renderCategoryList();
+  renderAccounts();
+  renderFilters();
+  renderTable();
+  renderCharts();
+}
+
+function renderCards() {
+  const o = state.overview;
+  let change = `<span class="note">No spending recorded last month</span>`;
+  if (o.previous_total_cents > 0) {
+    const pct = ((o.total_cents - o.previous_total_cents) / o.previous_total_cents) * 100;
+    const direction = pct > 0 ? "up" : pct < 0 ? "down" : "";
+    const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "•";
+    change = `<span class="${direction}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>
+              <div class="note">${money(o.previous_total_cents)} last month</div>`;
+  }
+  const top = o.top_merchant
+    ? `<div class="value">${esc(o.top_merchant.merchant)}</div><div class="note">${money(o.top_merchant.cents)}</div>`
+    : `<div class="value">–</div>`;
+  $("#cards").innerHTML = `
+    <div class="card stat hero"><div class="label">Total spent</div>
+      <div class="value">${money(o.total_cents)}</div>
+      <div class="note">${o.count} purchase${o.count === 1 ? "" : "s"}</div></div>
+    <div class="card stat"><div class="label">Vs last month</div>
+      <div class="value">${change}</div></div>
+    <div class="card stat"><div class="label">Daily average</div>
+      <div class="value">${money(o.daily_average_cents)}</div></div>
+    <div class="card stat"><div class="label">Top merchant</div>${top}</div>`;
+}
+
+function renderCategoryList() {
+  const o = state.overview;
+  $("#category-list").innerHTML = o.categories.map((c) => `
+    <li><button class="cat-row" data-category="${esc(c.category)}">
+      <span class="dot" style="background:${colorFor(c.category)}"></span>
+      <span class="name">${esc(prettyCategory(c.category))}</span>
+      <span class="pct">${((c.cents / o.total_cents) * 100).toFixed(0)}%</span>
+      <strong>${money(c.cents)}</strong>
+    </button></li>`).join("");
+}
+
+function renderAccounts() {
+  $("#accounts").innerHTML = state.accounts.map((a) => {
+    if (state.editing === a.account_id) {
+      return `<div class="account-row" data-id="${esc(a.account_id)}">
+        <input id="nickname-input" maxlength="60" value="${esc(a.nickname || "")}"
+               placeholder="${esc(a.default_label)}" aria-label="Card name">
+        <button class="btn primary" data-action="save">Save</button>
+        <button class="btn" data-action="cancel">Cancel</button></div>`;
+    }
+    const sub = a.nickname ? `<div class="acct-sub">${esc(a.default_label)}</div>` : "";
+    return `<div class="account-row" data-id="${esc(a.account_id)}">
+      <div class="acct-name">${esc(a.label)}${sub}</div>
+      <button class="btn" data-action="rename">Rename</button></div>`;
+  }).join("") || `<p class="hint">No credit cards found.</p>`;
+  const input = $("#nickname-input");
+  if (input) { input.focus(); input.select(); }
+}
+
+function renderFilters() {
+  const f = state.filters;
+  const categories = [...new Set(state.transactions.map((t) => t.category))].sort();
+  if (f.category && !categories.includes(f.category)) f.category = "";
+  $("#category-filter").innerHTML = `<option value="">All categories</option>` +
+    categories.map((c) => `<option value="${esc(c)}">${esc(prettyCategory(c))}</option>`).join("");
+  $("#category-filter").value = f.category;
+  $("#account-filter").innerHTML = `<option value="">All cards</option>` +
+    state.accounts.map((a) => `<option value="${esc(a.account_id)}">${esc(a.label)}</option>`).join("");
+  $("#account-filter").value = f.account;
+}
+
+const COLUMNS = [
+  { key: "date", label: "Date" },
+  { key: "merchant", label: "Merchant" },
+  { key: "category", label: "Category" },
+  { key: "card", label: "Card" },
+  { key: "amount", label: "Amount", cls: "amount" },
+];
+
+function sortValue(t, key) {
+  if (key === "amount") return t.amount_cents;
+  if (key === "card") return accountLabel(t.account_id).toLowerCase();
+  if (key === "category") return prettyCategory(t.category);
+  if (key === "merchant") return t.merchant.toLowerCase();
+  return t.date;
+}
+
+function renderTable() {
+  const { search, category, account } = state.filters;
+  const query = search.trim().toLowerCase();
+  const rows = state.transactions
+    .filter((t) => (!query || t.merchant.toLowerCase().includes(query))
+      && (!category || t.category === category)
+      && (!account || t.account_id === account))
+    .sort((a, b) => {
+      const x = sortValue(a, state.sort.key), y = sortValue(b, state.sort.key);
+      return (x < y ? -1 : x > y ? 1 : 0) * (state.sort.dir === "asc" ? 1 : -1);
+    });
+
+  $("#table-head").innerHTML = COLUMNS.map((c) => {
+    const sorted = state.sort.key === c.key;
+    const arrow = sorted ? (state.sort.dir === "asc" ? " ▲" : " ▼") : "";
+    return `<th class="${c.cls || ""}" data-sort="${c.key}"${sorted ? ` aria-sort="${state.sort.dir === "asc" ? "ascending" : "descending"}"` : ""}>${c.label}${arrow}</th>`;
+  }).join("");
+
+  $("#table-body").innerHTML = rows.map((t) => `
+    <tr><td>${esc(t.date)}</td>
+      <td>${esc(t.merchant)}${t.pending ? `<span class="badge">Pending</span>` : ""}</td>
+      <td><span class="chip"><span class="dot" style="background:${colorFor(t.category)}"></span>${esc(prettyCategory(t.category))}</span></td>
+      <td>${esc(accountLabel(t.account_id))}</td>
+      <td class="amount">${money(t.amount_cents)}</td></tr>`).join("")
+    || `<tr><td colspan="5" class="empty">No transactions match.</td></tr>`;
+
+  const total = rows.reduce((sum, t) => sum + t.amount_cents, 0);
+  $("#table-foot").innerHTML = rows.length
+    ? `<tr><td colspan="4">${rows.length} purchase${rows.length === 1 ? "" : "s"}</td><td class="amount">${money(total)}</td></tr>` : "";
+}
+
+function renderCharts() {
+  if (typeof Chart === "undefined") {
+    document.querySelectorAll(".chart-box").forEach((box) => {
+      box.innerHTML = `<p class="hint">Charts need Chart.js from the CDN, which could not be loaded.</p>`;
+    });
+    return;
+  }
+  Chart.defaults.color = cssVar("--muted");
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  if (state.tab === "overview") renderCategoryChart();
+  if (state.tab === "trends") renderTrendChart();
+}
+
+function renderCategoryChart() {
+  const categories = state.overview.categories;
+  charts.category?.destroy();
+  charts.category = new Chart($("#category-chart"), {
+    type: "doughnut",
+    data: {
+      labels: categories.map((c) => prettyCategory(c.category)),
+      datasets: [{
+        data: categories.map((c) => c.cents),
+        backgroundColor: categories.map((c) => colorFor(c.category)),
+        borderColor: cssVar("--card"), borderWidth: 3,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false, cutout: "62%",
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => ` ${ctx.label}: ${money(ctx.parsed)}` } } },
+    },
+  });
+}
+
+function renderTrendChart() {
+  const trend = state.trend;
+  charts.trend?.destroy();
+  charts.trend = new Chart($("#trend-chart"), {
+    type: "bar",
+    data: {
+      labels: trend.months.map((m) => monthName(m, "short")),
+      datasets: trend.categories.map((c) => ({
+        label: prettyCategory(c), data: trend.series[c],
+        backgroundColor: colorFor(c), borderRadius: 4,
+      })),
+    },
+    options: {
+      maintainAspectRatio: false,
+      scales: {
+        x: { stacked: true, grid: { display: false } },
+        y: { stacked: true, grid: { color: cssVar("--line") }, ticks: { callback: (v) => `$${(v / 100).toLocaleString("en-US")}` } },
+      },
+      plugins: { tooltip: { callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${money(ctx.parsed.y)}` } } },
+    },
+  });
+}
+
+// ---- Events ----------------------------------------------------------
+
+function showTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
+  TABS.forEach((name) => { $(`#tab-${name}`).hidden = name !== tab; });
+  history.replaceState(null, "", `#${tab}`);
+  renderCharts();
+}
+
+async function stepMonth(delta) {
+  const next = state.monthIndex + delta;
+  if (next < 0 || next >= state.months.length) return;
+  state.monthIndex = next;
+  await loadMonth();
+}
+
+async function saveNickname(accountId) {
+  const nickname = $("#nickname-input").value;
+  const result = await getJson(`/api/accounts/${encodeURIComponent(accountId)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nickname }),
+  });
+  state.accounts = result.accounts;
+  state.editing = null;
+  renderAccounts(); renderFilters(); renderTable();
+}
+
+$("#prev-month").addEventListener("click", () => stepMonth(-1));
+$("#next-month").addEventListener("click", () => stepMonth(1));
+document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+$("#category-list").addEventListener("click", (event) => {
+  const row = event.target.closest("[data-category]");
+  if (!row) return;
+  state.filters.category = row.dataset.category;
+  renderFilters(); renderTable(); showTab("transactions");
+});
+
+$("#search").addEventListener("input", (e) => { state.filters.search = e.target.value; renderTable(); });
+$("#category-filter").addEventListener("change", (e) => { state.filters.category = e.target.value; renderTable(); });
+$("#account-filter").addEventListener("change", (e) => { state.filters.account = e.target.value; renderTable(); });
+
+$("#table-head").addEventListener("click", (event) => {
+  const th = event.target.closest("[data-sort]");
+  if (!th) return;
+  const key = th.dataset.sort;
+  state.sort = state.sort.key === key
+    ? { key, dir: state.sort.dir === "asc" ? "desc" : "asc" }
+    : { key, dir: key === "amount" || key === "date" ? "desc" : "asc" };
+  renderTable();
+});
+
+$("#accounts").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-action]");
+  if (!button) return;
+  const id = button.closest("[data-id]").dataset.id;
+  try {
+    if (button.dataset.action === "rename") { state.editing = id; renderAccounts(); }
+    else if (button.dataset.action === "cancel") { state.editing = null; renderAccounts(); }
+    else if (button.dataset.action === "save") await saveNickname(id);
+  } catch (error) { alert(`Could not save: ${error.message}`); }
+});
+
+$("#accounts").addEventListener("keydown", async (event) => {
+  if (event.target.id !== "nickname-input") return;
+  if (event.key === "Escape") { state.editing = null; renderAccounts(); }
+  if (event.key === "Enter") {
+    try { await saveNickname(state.editing); } catch (error) { alert(`Could not save: ${error.message}`); }
+  }
+});
+
+// Chart colors come from CSS variables, so redraw when the theme flips.
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderCharts);
+
+init();
+</script>
+</body>
+</html>

@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     name       TEXT NOT NULL,
     type       TEXT NOT NULL,
     subtype    TEXT,
-    mask       TEXT
+    mask       TEXT,
+    nickname   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -47,6 +48,10 @@ def connect():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    # Databases created before nicknames existed don't have the column yet.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)")}
+    if "nickname" not in columns:
+        conn.execute("ALTER TABLE accounts ADD COLUMN nickname TEXT")
     return conn
 
 
@@ -166,3 +171,108 @@ def spending_summary(conn):
         "SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS total FROM transactions"
     ).fetchone()
     return row["n"], row["total"]
+
+
+# --- Dashboard queries -------------------------------------------------
+# `month` is "YYYY-MM". Dates are ISO text, so a BETWEEN on the first and
+# last possible day of the month selects it without parsing.
+
+def _month_range(month):
+    return f"{month}-01", f"{month}-31"
+
+
+def account_label(account):
+    """Nickname if set, otherwise the Plaid name with the card's last digits."""
+    if account["nickname"]:
+        return account["nickname"]
+    return f'{account["name"]} ••{account["mask"]}' if account["mask"] else account["name"]
+
+
+def list_accounts(conn):
+    rows = conn.execute(
+        "SELECT account_id, name, mask, nickname FROM accounts "
+        "WHERE type = 'credit' ORDER BY name, mask"
+    ).fetchall()
+    return [
+        {
+            "account_id": r["account_id"],
+            "label": account_label(r),
+            "default_label": account_label({**dict(r), "nickname": None}),
+            "nickname": r["nickname"],
+        }
+        for r in rows
+    ]
+
+
+def set_account_nickname(conn, account_id, nickname):
+    """Set a display name, or reset to the default with None. False if no such account."""
+    cursor = conn.execute(
+        "UPDATE accounts SET nickname = ? WHERE account_id = ?", (nickname, account_id)
+    )
+    return cursor.rowcount > 0
+
+
+def list_months(conn):
+    rows = conn.execute(
+        "SELECT DISTINCT substr(date, 1, 7) AS month FROM transactions ORDER BY month"
+    ).fetchall()
+    return [r["month"] for r in rows]
+
+
+def month_totals(conn, month):
+    start, end = _month_range(month)
+    row = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS total "
+        "FROM transactions WHERE date BETWEEN ? AND ?",
+        (start, end),
+    ).fetchone()
+    return row["n"], row["total"]
+
+
+def month_top_merchant(conn, month):
+    start, end = _month_range(month)
+    row = conn.execute(
+        "SELECT COALESCE(merchant_name, name) AS merchant, SUM(amount_cents) AS cents "
+        "FROM transactions WHERE date BETWEEN ? AND ? "
+        "GROUP BY merchant ORDER BY cents DESC LIMIT 1",
+        (start, end),
+    ).fetchone()
+    return {"merchant": row["merchant"], "cents": row["cents"]} if row else None
+
+
+def month_categories(conn, month):
+    start, end = _month_range(month)
+    rows = conn.execute(
+        "SELECT COALESCE(category_primary, 'UNCATEGORIZED') AS category, "
+        "SUM(amount_cents) AS cents, COUNT(*) AS n "
+        "FROM transactions WHERE date BETWEEN ? AND ? "
+        "GROUP BY category ORDER BY cents DESC",
+        (start, end),
+    ).fetchall()
+    return [{"category": r["category"], "cents": r["cents"], "count": r["n"]} for r in rows]
+
+
+def month_transactions(conn, month):
+    start, end = _month_range(month)
+    rows = conn.execute(
+        "SELECT transaction_id, date, amount_cents, pending, account_id, "
+        "COALESCE(merchant_name, name) AS merchant, "
+        "COALESCE(category_primary, 'UNCATEGORIZED') AS category "
+        "FROM transactions WHERE date BETWEEN ? AND ? "
+        "ORDER BY date DESC, transaction_id",
+        (start, end),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def category_by_month(conn):
+    """Return {month: {category: cents}} across all stored transactions."""
+    rows = conn.execute(
+        "SELECT substr(date, 1, 7) AS month, "
+        "COALESCE(category_primary, 'UNCATEGORIZED') AS category, "
+        "SUM(amount_cents) AS cents FROM transactions GROUP BY month, category"
+    ).fetchall()
+    result = {}
+    for r in rows:
+        result.setdefault(r["month"], {})[r["category"]] = r["cents"]
+    return result
