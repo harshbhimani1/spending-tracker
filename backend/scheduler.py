@@ -13,6 +13,9 @@ INTERVALS = {"1h": 3600, "1d": 86400, "1w": 604800, "off": None}
 DEFAULT_INTERVAL = "1d"
 SETTING_KEY = "refresh_interval"
 CHECK_EVERY = 30  # seconds between "is a sync due?" checks
+# After a failed sync, retry sooner than the normal interval so a brief outage
+# doesn't leave a weekly schedule without data for a week.
+RETRY_AFTER_ERROR = 1800  # seconds
 
 
 class SyncBusy(Exception):
@@ -77,6 +80,8 @@ class Scheduler:
         seconds = INTERVALS[interval]
         if seconds is None or last_attempt is None:
             return None
+        if last_attempt["status"] == "error":
+            seconds = min(seconds, RETRY_AFTER_ERROR)
         finished = datetime.fromisoformat(last_attempt["finished_at"])
         return (finished + timedelta(seconds=seconds)).isoformat(timespec="seconds")
 
@@ -88,8 +93,8 @@ class Scheduler:
             return False
         if last_attempt is None:
             return True
-        # Failed attempts count too, so an outage retries at the normal
-        # interval instead of hammering Plaid every 30 seconds.
+        # _next_run spaces out retries after a failure, so an outage doesn't
+        # hammer Plaid every 30 seconds.
         return datetime.fromisoformat(self._next_run(interval, last_attempt)) <= datetime.now().astimezone()
 
     def _loop(self):
