@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+pyvenv.cfg
+
+# Plaid access token
+plaid_token.json
