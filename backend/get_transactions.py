@@ -67,6 +67,11 @@ with database.connect() as conn:
         gone = [t["transaction_id"] for t in data["modified"] if not is_purchase(t, credit_ids)]
         gone += [t["transaction_id"] for t in data["removed"]]
 
+        # Order matters: if an ID shows up in both added and modified, the
+        # modified version must win. Upserts run in list order, so `changed`
+        # goes after `new` to overwrite it. Deletes run after the upserts, so a
+        # modified transaction that stopped being a purchase ends up removed.
+        #
         # Cursor is saved in the same SQLite transaction as the page it
         # covers, so a crash can't skip data.
         database.upsert_transactions(conn, new + changed)
