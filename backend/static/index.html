@@ -101,6 +101,15 @@
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; background: var(--accent-soft); font-size: 0.85rem; font-weight: 600; }
   .badge { margin-left: 6px; font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 
+  .syncbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px 20px; margin-bottom: 20px; }
+  .sync-info { flex: 1; min-width: 14em; }
+  .sync-info strong { font-weight: 700; }
+  .sync-sub { color: var(--muted); font-size: 0.85rem; }
+  .sync-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .sync-controls label { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
+  .sync-controls select { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); margin-left: 6px; }
+  .btn:disabled { opacity: 0.6; cursor: default; }
+
   .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
   .error { color: var(--bad); }
 </style>
@@ -116,9 +125,18 @@
     </div>
   </header>
 
-  <div id="empty" class="card empty" hidden>
-    No transactions yet. Run <code>python get_transactions.py</code> from <code>backend/</code>, then reload.
+  <div class="card syncbar" id="syncbar" hidden>
+    <div class="sync-info">
+      <div id="sync-text"></div>
+      <div class="sync-sub" id="sync-sub"></div>
+    </div>
+    <div class="sync-controls">
+      <label>Auto-refresh<select id="interval-select"></select></label>
+      <button class="btn primary" id="sync-now">Sync now</button>
+    </div>
   </div>
+
+  <div id="empty" class="card empty" hidden></div>
 
   <div id="app" hidden>
     <nav class="tabs" role="tablist">
@@ -180,6 +198,7 @@ const PALETTE = ["#6c5ce7", "#00b894", "#ff7675", "#fdcb6e", "#0984e3", "#e84393
 const state = {
   months: [], monthIndex: 0, accounts: [], trend: null,
   overview: null, transactions: [],
+  sync: null, syncing: false,
   tab: "overview", editing: null,
   filters: { search: "", category: "", account: "" },
   sort: { key: "date", dir: "desc" },
@@ -214,25 +233,127 @@ async function getJson(url, options) {
 
 // ---- Loading ---------------------------------------------------------
 
+const EMPTY_HTML = `No transactions yet. Click <strong>Sync now</strong> to pull them in from your bank.`;
+
+// Fetch everything, keeping the selected month if it still exists. Used on
+// first load and again whenever a sync brings in new data.
+async function loadData() {
+  const keep = state.months.length ? currentMonth() : null;
+  const [months, accounts, trend] = await Promise.all([
+    getJson("/api/months"), getJson("/api/accounts"), getJson("/api/trend"),
+  ]);
+  state.months = months.months;
+  state.accounts = accounts.accounts;
+  state.trend = trend;
+  trend.categories.forEach(colorFor);
+
+  const hasData = state.months.length > 0;
+  $("#empty").innerHTML = EMPTY_HTML;
+  $("#empty").hidden = hasData;
+  $("#month-picker").hidden = !hasData;
+  $("#app").hidden = !hasData;
+  if (!hasData) return;
+
+  const index = state.months.indexOf(keep);
+  state.monthIndex = index >= 0 ? index : state.months.length - 1;
+  await loadMonth();
+}
+
 async function init() {
+  $("#syncbar").hidden = false;
   try {
-    const [months, accounts, trend] = await Promise.all([
-      getJson("/api/months"), getJson("/api/accounts"), getJson("/api/trend"),
-    ]);
-    state.months = months.months;
-    state.accounts = accounts.accounts;
-    state.trend = trend;
-    trend.categories.forEach(colorFor);
-    if (!state.months.length) { $("#empty").hidden = false; return; }
-    state.monthIndex = state.months.length - 1;
-    $("#month-picker").hidden = false;
-    $("#app").hidden = false;
-    await loadMonth();
+    await loadData();
     const hashTab = location.hash.slice(1);
-    if (TABS.includes(hashTab)) showTab(hashTab);
+    if (state.months.length && TABS.includes(hashTab)) showTab(hashTab);
   } catch (error) {
     $("#empty").hidden = false;
     $("#empty").innerHTML = `<span class="error">Could not load data: ${esc(error.message)}</span>`;
+  }
+  await refreshSync();
+  // Picks up background syncs and keeps the "x min ago" text fresh.
+  setInterval(refreshSync, 30000);
+}
+
+// ---- Sync status -----------------------------------------------------
+
+const INTERVAL_LABELS = { "1h": "Every hour", "1d": "Every day", "1w": "Every week", "off": "Off" };
+
+function relativeTime(iso) {
+  const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  const future = seconds < 0;
+  const abs = Math.abs(seconds);
+  if (abs < 45) return future ? "any moment" : "just now";
+  const minutes = Math.round(abs / 60), hours = Math.round(abs / 3600);
+  const [value, unit] = minutes < 60 ? [minutes, "min"]
+    : hours < 24 ? [hours, "hr"] : [Math.round(abs / 86400), "day"];
+  const text = `${value} ${unit}${unit === "day" && value !== 1 ? "s" : ""}`;
+  return future ? `in ${text}` : `${text} ago`;
+}
+
+const localTime = (iso) => new Date(iso).toLocaleString("en-US",
+  { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+function renderSync() {
+  const s = state.sync;
+  if (!s) return;
+  const failed = s.last_attempt && s.last_attempt.status === "error";
+
+  $("#sync-text").innerHTML = s.last_success_at
+    ? `Last updated <strong title="${esc(localTime(s.last_success_at))}">${relativeTime(s.last_success_at)}</strong>`
+    : `<strong>Not synced yet</strong>`;
+
+  let sub = s.interval === "off" ? "Auto-refresh is off"
+    : s.next_run_at ? `Next sync ${relativeTime(s.next_run_at)}` : "First sync starting soon";
+  if (s.running) sub = "Syncing now…";
+  $("#sync-sub").innerHTML = failed && !s.running
+    ? `<span class="error">Last attempt failed (${esc(relativeTime(s.last_attempt.finished_at))}): ${esc(s.last_attempt.error || "unknown error")}</span>`
+    : esc(sub);
+
+  const select = $("#interval-select");
+  select.innerHTML = s.intervals.map((i) => `<option value="${i}">${INTERVAL_LABELS[i] || i}</option>`).join("");
+  select.value = s.interval;
+
+  const button = $("#sync-now");
+  button.disabled = s.running || state.syncing;
+  button.textContent = s.running || state.syncing ? "Syncing…" : "Sync now";
+}
+
+// Store a fresh status; reload the data if a sync finished since we last looked.
+async function applySync(status) {
+  const previous = state.sync ? state.sync.last_success_at : undefined;
+  state.sync = status;
+  renderSync();
+  if (previous !== undefined && status.last_success_at !== previous) await loadData();
+}
+
+async function refreshSync() {
+  try { await applySync(await getJson("/api/sync")); } catch (error) { /* server briefly down; try next tick */ }
+}
+
+async function syncNow() {
+  state.syncing = true;
+  renderSync();
+  try {
+    const response = await fetch("/api/sync", { method: "POST" });
+    if (response.status === 409) return await refreshSync();
+    if (!response.ok) throw new Error(`Sync request failed (${response.status})`);
+    await applySync(await response.json());
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    state.syncing = false;
+    renderSync();
+  }
+}
+
+async function changeInterval(interval) {
+  try {
+    await applySync(await getJson("/api/sync/interval", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ interval }),
+    }));
+  } catch (error) {
+    alert(`Could not save: ${error.message}`);
+    renderSync();
   }
 }
 
@@ -456,6 +577,8 @@ async function saveNickname(accountId) {
   renderAccounts(); renderFilters(); renderTable();
 }
 
+$("#sync-now").addEventListener("click", syncNow);
+$("#interval-select").addEventListener("change", (e) => changeInterval(e.target.value));
 $("#prev-month").addEventListener("click", () => stepMonth(-1));
 $("#next-month").addEventListener("click", () => stepMonth(1));
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));

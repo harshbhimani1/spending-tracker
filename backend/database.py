@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "spending.db"
@@ -34,6 +35,22 @@ CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id);
 CREATE TABLE IF NOT EXISTS sync_state (
     item_id TEXT PRIMARY KEY,
     cursor  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sync_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    status      TEXT NOT NULL CHECK (status IN ('success', 'error')),
+    added       INTEGER NOT NULL DEFAULT 0,
+    modified    INTEGER NOT NULL DEFAULT 0,
+    removed     INTEGER NOT NULL DEFAULT 0,
+    error       TEXT
 );
 """
 
@@ -151,6 +168,52 @@ def set_cursor(conn, item_id, cursor):
         """,
         (item_id, cursor),
     )
+
+
+def get_setting(conn, key, default=None):
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(conn, key, value):
+    conn.execute(
+        """
+        INSERT INTO settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def log_sync(conn, started_at, status, counts=None, error=None):
+    """Record one sync attempt. `counts` has added/modified/removed on success."""
+    counts = counts or {}
+    conn.execute(
+        """
+        INSERT INTO sync_log (started_at, finished_at, status, added, modified, removed, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            started_at, utc_now(), status,
+            counts.get("added", 0), counts.get("modified", 0), counts.get("removed", 0),
+            error,
+        ),
+    )
+
+
+def last_sync_attempt(conn, status=None):
+    """Most recent sync attempt, optionally only successful or failed ones."""
+    query = "SELECT * FROM sync_log"
+    params = ()
+    if status:
+        query += " WHERE status = ?"
+        params = (status,)
+    row = conn.execute(query + " ORDER BY id DESC LIMIT 1", params).fetchone()
+    return dict(row) if row else None
 
 
 def recent_transactions(conn, limit=20):

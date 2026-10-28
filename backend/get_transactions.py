@@ -1,6 +1,7 @@
 import json
 import os
 import requests
+from contextlib import closing
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -14,16 +15,6 @@ BASE_URL = f"https://{os.getenv('PLAID_ENV', 'sandbox')}.plaid.com"
 NON_SPENDING = {"LOAN_PAYMENTS", "TRANSFER_IN", "TRANSFER_OUT"}
 
 token_file = Path(__file__).parent / "plaid_token.json"
-if not token_file.exists():
-    raise SystemExit(f"{token_file.name} not found; run connect_bank.py first")
-
-token_data = json.loads(token_file.read_text())
-item_id = token_data["item_id"]
-credentials = {
-    "client_id": os.getenv("PLAID_CLIENT_ID"),
-    "secret": os.getenv("PLAID_SECRET"),
-    "access_token": token_data["access_token"],
-}
 
 
 def is_purchase(transaction, credit_ids):
@@ -34,71 +25,126 @@ def is_purchase(transaction, credit_ids):
     return category not in NON_SPENDING
 
 
-response = requests.post(
-    f"{BASE_URL}/accounts/get",
-    json=credentials,
-    timeout=30
-)
-response.raise_for_status()
+def check_plaid(response):
+    """Like raise_for_status, but includes Plaid's own explanation of the error."""
+    if response.ok:
+        return
+    try:
+        detail = response.json().get("error_message")
+    except ValueError:
+        detail = None
+    raise RuntimeError(f"Plaid error {response.status_code}: {detail or response.reason}")
 
-accounts = response.json()["accounts"]
-credit_ids = {a["account_id"] for a in accounts if a["type"] == "credit"}
 
-added = modified = removed = 0
+def sync_transactions():
+    """Pull new and changed purchases from Plaid into the database.
 
-with database.connect() as conn:
-    database.upsert_accounts(conn, item_id, accounts)
-    cursor = database.get_cursor(conn, item_id)
+    Returns {"added", "modified", "removed"} counts. Raises on any failure; the
+    saved cursor only ever advances together with the writes it covers.
+    """
+    if not token_file.exists():
+        raise FileNotFoundError(f"{token_file.name} not found; run connect_bank.py first")
 
-with database.connect() as conn:
-    while True:
-        response = requests.post(
-            f"{BASE_URL}/transactions/sync",
-            json={**credentials, "cursor": cursor},
-            timeout=60
-        )
-        response.raise_for_status()
-        data = response.json()
+    token_data = json.loads(token_file.read_text())
+    item_id = token_data["item_id"]
+    credentials = {
+        "client_id": os.getenv("PLAID_CLIENT_ID"),
+        "secret": os.getenv("PLAID_SECRET"),
+        "access_token": token_data["access_token"],
+    }
 
-        # A modified transaction may stop qualifying (e.g. recategorized as a
-        # transfer), so anything modified that isn't a purchase is dropped.
-        new = [t for t in data["added"] if is_purchase(t, credit_ids)]
-        changed = [t for t in data["modified"] if is_purchase(t, credit_ids)]
-        gone = [t["transaction_id"] for t in data["modified"] if not is_purchase(t, credit_ids)]
-        gone += [t["transaction_id"] for t in data["removed"]]
+    response = requests.post(
+        f"{BASE_URL}/accounts/get",
+        json=credentials,
+        timeout=30
+    )
+    check_plaid(response)
 
-        # Order matters: if an ID shows up in both added and modified, the
-        # modified version must win. Upserts run in list order, so `changed`
-        # goes after `new` to overwrite it. Deletes run after the upserts, so a
-        # modified transaction that stopped being a purchase ends up removed.
-        #
-        # Cursor is saved in the same SQLite transaction as the page it
-        # covers, so a crash can't skip data.
-        database.upsert_transactions(conn, new + changed)
-        database.delete_transactions(conn, gone)
-        cursor = data["next_cursor"]
-        database.set_cursor(conn, item_id, cursor)
-        conn.commit()
+    accounts = response.json()["accounts"]
+    credit_ids = {a["account_id"] for a in accounts if a["type"] == "credit"}
 
-        added += len(new)
-        modified += len(changed)
-        removed += len(gone)
+    counts = {"added": 0, "modified": 0, "removed": 0}
 
-        if not data["has_more"]:
-            break
+    with closing(database.connect()) as conn:
+        with conn:
+            database.upsert_accounts(conn, item_id, accounts)
+        cursor = database.get_cursor(conn, item_id)
 
-print(f"Synced item {item_id}: {added} added, {modified} modified, {removed} removed")
+        while True:
+            response = requests.post(
+                f"{BASE_URL}/transactions/sync",
+                json={**credentials, "cursor": cursor},
+                timeout=60
+            )
+            check_plaid(response)
+            data = response.json()
 
-with database.connect() as conn:
-    for t in database.recent_transactions(conn):
-        print(
-            t["merchant_name"] or t["name"],
-            f'${t["amount_cents"] / 100:.2f}',
-            "Category:", t["category_primary"],
-            "Subcategory:", t["category_detailed"]
-        )
-        print()
+            # A modified transaction may stop qualifying (e.g. recategorized as a
+            # transfer), so anything modified that isn't a purchase is dropped.
+            new = [t for t in data["added"] if is_purchase(t, credit_ids)]
+            changed = [t for t in data["modified"] if is_purchase(t, credit_ids)]
+            gone = [t["transaction_id"] for t in data["modified"] if not is_purchase(t, credit_ids)]
+            gone += [t["transaction_id"] for t in data["removed"]]
 
-    count, total_cents = database.spending_summary(conn)
+            # Order matters: if an ID shows up in both added and modified, the
+            # modified version must win. Upserts run in list order, so `changed`
+            # goes after `new` to overwrite it. Deletes run after the upserts, so a
+            # modified transaction that stopped being a purchase ends up removed.
+            #
+            # Cursor is saved in the same SQLite transaction as the page it
+            # covers, so a crash can't skip data.
+            with conn:
+                database.upsert_transactions(conn, new + changed)
+                database.delete_transactions(conn, gone)
+                cursor = data["next_cursor"]
+                database.set_cursor(conn, item_id, cursor)
 
-print(f"\nDatabase holds {count} credit card purchases totaling ${total_cents / 100:,.2f}")
+            counts["added"] += len(new)
+            counts["modified"] += len(changed)
+            counts["removed"] += len(gone)
+
+            if not data["has_more"]:
+                break
+
+    return counts
+
+
+def sync_and_log():
+    """Run a sync and record the attempt, so the dashboard can show when it last worked."""
+    started_at = database.utc_now()
+    try:
+        counts = sync_transactions()
+    except Exception as exc:
+        with closing(database.connect()) as conn, conn:
+            database.log_sync(conn, started_at, "error", error=str(exc)[:300])
+        raise
+    with closing(database.connect()) as conn, conn:
+        database.log_sync(conn, started_at, "success", counts)
+    return counts
+
+
+def main():
+    try:
+        counts = sync_and_log()
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc))
+
+    print(f"Synced: {counts['added']} added, {counts['modified']} modified, {counts['removed']} removed")
+
+    with closing(database.connect()) as conn:
+        for t in database.recent_transactions(conn):
+            print(
+                t["merchant_name"] or t["name"],
+                f'${t["amount_cents"] / 100:.2f}',
+                "Category:", t["category_primary"],
+                "Subcategory:", t["category_detailed"]
+            )
+            print()
+
+        count, total_cents = database.spending_summary(conn)
+
+    print(f"\nDatabase holds {count} credit card purchases totaling ${total_cents / 100:,.2f}")
+
+
+if __name__ == "__main__":
+    main()

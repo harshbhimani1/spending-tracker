@@ -1,5 +1,5 @@
 import calendar
-from contextlib import closing
+from contextlib import asynccontextmanager, closing
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Optional
@@ -9,11 +9,22 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import database
+from scheduler import INTERVALS, Scheduler, SyncBusy
 
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_TREND_MONTHS = 12
 
-app = FastAPI(title="Spending dashboard")
+scheduler = Scheduler()
+
+
+@asynccontextmanager
+async def lifespan(app):
+    scheduler.start()
+    yield
+    scheduler.stop()
+
+
+app = FastAPI(title="Spending dashboard", lifespan=lifespan)
 
 Month = Annotated[str, Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
 
@@ -94,6 +105,35 @@ def trend():
 def accounts():
     with db() as conn:
         return {"accounts": database.list_accounts(conn)}
+
+
+@app.get("/api/sync")
+def sync_status():
+    return scheduler.status()
+
+
+class IntervalUpdate(BaseModel):
+    interval: str
+
+
+@app.put("/api/sync/interval")
+def set_sync_interval(update: IntervalUpdate):
+    if update.interval not in INTERVALS:
+        raise HTTPException(status_code=422, detail=f"interval must be one of {list(INTERVALS)}")
+    scheduler.set_interval(update.interval)
+    return scheduler.status()
+
+
+@app.post("/api/sync")
+def sync_now():
+    """Run a sync right now and wait for it. Failures are reported in the status."""
+    try:
+        scheduler.run_now()
+    except SyncBusy:
+        raise HTTPException(status_code=409, detail="A sync is already running")
+    except Exception:
+        pass  # already recorded in sync_log; the status below carries the error
+    return scheduler.status()
 
 
 class AccountUpdate(BaseModel):
