@@ -68,7 +68,18 @@ case "${1:-}" in
     plutil -lint "$PLIST" >/dev/null
     # Replace any running copy so re-running install picks up changes.
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-    launchctl bootstrap "$DOMAIN" "$PLIST"
+    # bootout returns before launchd has finished removing the service, and
+    # bootstrapping too early fails with "Input/output error". Wait for it to
+    # disappear, then retry the load a few times.
+    for _ in $(seq 1 20); do
+      launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    for attempt in 1 2 3; do
+      launchctl bootstrap "$DOMAIN" "$PLIST" && break
+      [ "$attempt" -eq 3 ] && exit 1
+      sleep 2
+    done
     echo "Installed $LABEL"
     echo "  Dashboard: http://localhost:$PORT"
     echo "  Logs:      $LOG"
