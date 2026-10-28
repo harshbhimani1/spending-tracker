@@ -5,3 +5,6 @@ pyvenv.cfg
 
 # Plaid access token
 plaid_token.json
+
+# Local SQLite database
+*.db
