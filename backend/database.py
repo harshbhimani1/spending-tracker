@@ -1,8 +1,25 @@
+import json
+import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 DB_PATH = Path(__file__).parent / "spending.db"
+# Where the single bank lived before banks moved into the items table.
+LEGACY_TOKEN_FILE = Path(__file__).parent / "plaid_token.json"
+
+
+def active_environment():
+    """Plaid environment from .env. Only banks linked in it show on the dashboard."""
+    environment = os.getenv("PLAID_ENV", "sandbox")
+    if not re.fullmatch(r"[a-z]+", environment):
+        raise ValueError(f"Invalid PLAID_ENV: {environment!r}")
+    return environment
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -31,6 +48,14 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id);
+
+CREATE TABLE IF NOT EXISTS items (
+    item_id          TEXT PRIMARY KEY,
+    access_token     TEXT NOT NULL,
+    institution_name TEXT,
+    environment      TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS sync_state (
     item_id TEXT PRIMARY KEY,
@@ -69,7 +94,56 @@ def connect():
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)")}
     if "nickname" not in columns:
         conn.execute("ALTER TABLE accounts ADD COLUMN nickname TEXT")
+    # Reads go through this view so sandbox test data never mixes into the
+    # totals once a production key is in use (and vice versa). The environment
+    # is validated to letters only, so inlining it is safe.
+    conn.execute(
+        f"""
+        CREATE TEMP VIEW active_transactions AS
+        SELECT t.* FROM transactions t
+        JOIN accounts a USING (account_id)
+        JOIN items i USING (item_id)
+        WHERE i.environment = '{active_environment()}'
+        """
+    )
+    import_legacy_token(conn)
     return conn
+
+
+def import_legacy_token(conn):
+    """One-time move of the bank saved in plaid_token.json into the items table."""
+    if not LEGACY_TOKEN_FILE.exists() or conn.execute("SELECT 1 FROM items LIMIT 1").fetchone():
+        return
+    data = json.loads(LEGACY_TOKEN_FILE.read_text())
+    # That file was only ever written by connect_bank.py, a sandbox-only script.
+    add_item(conn, data["item_id"], data["access_token"], None, "sandbox")
+    conn.commit()
+
+
+def add_item(conn, item_id, access_token, institution_name, environment):
+    conn.execute(
+        """
+        INSERT INTO items (item_id, access_token, institution_name, environment, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(item_id) DO UPDATE SET
+            access_token = excluded.access_token,
+            institution_name = COALESCE(excluded.institution_name, institution_name)
+        """,
+        (item_id, access_token, institution_name, environment, utc_now()),
+    )
+
+
+def list_items(conn):
+    """Banks linked in the active environment, oldest first. Includes access tokens."""
+    rows = conn.execute(
+        "SELECT * FROM items WHERE environment = ? ORDER BY created_at, item_id",
+        (active_environment(),),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_institution_name(conn, item_id, name):
+    conn.execute("UPDATE items SET institution_name = ? WHERE item_id = ?", (name, item_id))
 
 
 def dollars_to_cents(amount):
@@ -220,7 +294,7 @@ def recent_transactions(conn, limit=20):
     return conn.execute(
         """
         SELECT t.*, a.name AS account_name
-        FROM transactions t JOIN accounts a USING (account_id)
+        FROM active_transactions t JOIN accounts a USING (account_id)
         ORDER BY t.date DESC, t.transaction_id
         LIMIT ?
         """,
@@ -231,7 +305,7 @@ def recent_transactions(conn, limit=20):
 def spending_summary(conn):
     """Return (purchase_count, total_cents) across all stored transactions."""
     row = conn.execute(
-        "SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS total FROM transactions"
+        "SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS total FROM active_transactions"
     ).fetchone()
     return row["n"], row["total"]
 
@@ -253,12 +327,15 @@ def account_label(account):
 
 def list_accounts(conn):
     rows = conn.execute(
-        "SELECT account_id, name, mask, nickname FROM accounts "
-        "WHERE type = 'credit' ORDER BY name, mask"
+        "SELECT a.account_id, a.item_id, a.name, a.mask, a.nickname FROM accounts a "
+        "JOIN items i USING (item_id) WHERE a.type = 'credit' AND i.environment = ? "
+        "ORDER BY a.name, a.mask",
+        (active_environment(),),
     ).fetchall()
     return [
         {
             "account_id": r["account_id"],
+            "item_id": r["item_id"],
             "label": account_label(r),
             "default_label": account_label({**dict(r), "nickname": None}),
             "nickname": r["nickname"],
@@ -277,7 +354,7 @@ def set_account_nickname(conn, account_id, nickname):
 
 def list_months(conn):
     rows = conn.execute(
-        "SELECT DISTINCT substr(date, 1, 7) AS month FROM transactions ORDER BY month"
+        "SELECT DISTINCT substr(date, 1, 7) AS month FROM active_transactions ORDER BY month"
     ).fetchall()
     return [r["month"] for r in rows]
 
@@ -286,7 +363,7 @@ def month_totals(conn, month):
     start, end = _month_range(month)
     row = conn.execute(
         "SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS total "
-        "FROM transactions WHERE date BETWEEN ? AND ?",
+        "FROM active_transactions WHERE date BETWEEN ? AND ?",
         (start, end),
     ).fetchone()
     return row["n"], row["total"]
@@ -296,7 +373,7 @@ def month_top_merchant(conn, month):
     start, end = _month_range(month)
     row = conn.execute(
         "SELECT COALESCE(merchant_name, name) AS merchant, SUM(amount_cents) AS cents "
-        "FROM transactions WHERE date BETWEEN ? AND ? "
+        "FROM active_transactions WHERE date BETWEEN ? AND ? "
         "GROUP BY merchant ORDER BY cents DESC LIMIT 1",
         (start, end),
     ).fetchone()
@@ -308,7 +385,7 @@ def month_categories(conn, month):
     rows = conn.execute(
         "SELECT COALESCE(category_primary, 'UNCATEGORIZED') AS category, "
         "SUM(amount_cents) AS cents, COUNT(*) AS n "
-        "FROM transactions WHERE date BETWEEN ? AND ? "
+        "FROM active_transactions WHERE date BETWEEN ? AND ? "
         "GROUP BY category ORDER BY cents DESC",
         (start, end),
     ).fetchall()
@@ -321,7 +398,7 @@ def month_transactions(conn, month):
         "SELECT transaction_id, date, amount_cents, pending, account_id, "
         "COALESCE(merchant_name, name) AS merchant, "
         "COALESCE(category_primary, 'UNCATEGORIZED') AS category "
-        "FROM transactions WHERE date BETWEEN ? AND ? "
+        "FROM active_transactions WHERE date BETWEEN ? AND ? "
         "ORDER BY date DESC, transaction_id",
         (start, end),
     ).fetchall()
@@ -333,7 +410,7 @@ def category_by_month(conn):
     rows = conn.execute(
         "SELECT substr(date, 1, 7) AS month, "
         "COALESCE(category_primary, 'UNCATEGORIZED') AS category, "
-        "SUM(amount_cents) AS cents FROM transactions GROUP BY month, category"
+        "SUM(amount_cents) AS cents FROM active_transactions GROUP BY month, category"
     ).fetchall()
     result = {}
     for r in rows:

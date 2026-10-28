@@ -110,6 +110,13 @@
   .sync-controls select { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); margin-left: 6px; }
   .btn:disabled { opacity: 0.6; cursor: default; }
 
+  .bank { padding: 6px 0 10px; border-top: 1px solid var(--line); }
+  .bank:first-child { border-top: 0; padding-top: 0; }
+  .bank-name { font-weight: 700; margin: 8px 0 2px; }
+  .bank-name .sub { color: var(--muted); font-size: 0.8rem; font-weight: 400; margin-left: 8px; }
+  .bank .account-row { border-top: 0; padding: 6px 0 6px 12px; }
+  .badge.env { margin-left: 10px; vertical-align: middle; }
+
   .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
   .error { color: var(--bad); }
 </style>
@@ -117,7 +124,7 @@
 <body>
 <main>
   <header>
-    <h1>Spending Tracker</h1>
+    <h1>Spending Tracker<span class="badge env" id="env-badge" hidden>Sandbox · test data</span></h1>
     <div class="month-picker" id="month-picker" hidden>
       <button class="icon-btn" id="prev-month" aria-label="Previous month">‹</button>
       <span id="month-label"></span>
@@ -132,6 +139,7 @@
     </div>
     <div class="sync-controls">
       <label>Auto-refresh<select id="interval-select"></select></label>
+      <button class="btn" id="connect-bank">Connect a bank</button>
       <button class="btn primary" id="sync-now">Sync now</button>
     </div>
   </div>
@@ -159,7 +167,7 @@
         </div>
       </div>
       <div class="card">
-        <h2>Cards</h2>
+        <h2>Banks &amp; cards</h2>
         <div id="accounts"></div>
       </div>
     </section>
@@ -191,6 +199,7 @@
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
 <script>
 const PALETTE = ["#6c5ce7", "#00b894", "#ff7675", "#fdcb6e", "#0984e3", "#e84393",
                  "#00cec9", "#e17055", "#a29bfe", "#55efc4", "#74b9fd", "#fab1a0"];
@@ -199,6 +208,7 @@ const state = {
   months: [], monthIndex: 0, accounts: [], trend: null,
   overview: null, transactions: [],
   sync: null, syncing: false,
+  items: [], environment: "",
   tab: "overview", editing: null,
   filters: { search: "", category: "", account: "" },
   sort: { key: "date", dir: "desc" },
@@ -227,28 +237,38 @@ const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyV
 
 async function getJson(url, options) {
   const response = await fetch(url, options);
-  if (!response.ok) throw new Error(`${url} failed (${response.status})`);
+  if (!response.ok) {
+    // Prefer the server's explanation (e.g. Plaid's error text) over a bare status.
+    const body = await response.json().catch(() => ({}));
+    throw new Error(typeof body.detail === "string" ? body.detail : `${url} failed (${response.status})`);
+  }
   return response.json();
 }
 
 // ---- Loading ---------------------------------------------------------
 
-const EMPTY_HTML = `No transactions yet. Click <strong>Sync now</strong> to pull them in from your bank.`;
+const EMPTY_NO_BANK = `No bank connected yet. Click <strong>Connect a bank</strong> to get started.`;
+const EMPTY_NO_DATA = `No transactions yet. Click <strong>Sync now</strong> to pull them in from your bank.`;
 
 // Fetch everything, keeping the selected month if it still exists. Used on
-// first load and again whenever a sync brings in new data.
+// first load and again whenever a sync or a new bank brings in new data.
 async function loadData() {
   const keep = state.months.length ? currentMonth() : null;
-  const [months, accounts, trend] = await Promise.all([
-    getJson("/api/months"), getJson("/api/accounts"), getJson("/api/trend"),
+  const [months, accounts, trend, items] = await Promise.all([
+    getJson("/api/months"), getJson("/api/accounts"), getJson("/api/trend"), getJson("/api/items"),
   ]);
   state.months = months.months;
   state.accounts = accounts.accounts;
   state.trend = trend;
+  state.items = items.items;
+  state.environment = items.environment;
   trend.categories.forEach(colorFor);
 
+  $("#env-badge").hidden = state.environment !== "sandbox";
+  renderSync();
+
   const hasData = state.months.length > 0;
-  $("#empty").innerHTML = EMPTY_HTML;
+  $("#empty").innerHTML = state.items.length ? EMPTY_NO_DATA : EMPTY_NO_BANK;
   $("#empty").hidden = hasData;
   $("#month-picker").hidden = !hasData;
   $("#app").hidden = !hasData;
@@ -314,8 +334,60 @@ function renderSync() {
   select.value = s.interval;
 
   const button = $("#sync-now");
-  button.disabled = s.running || state.syncing;
+  const noBank = !state.items.length;
+  button.disabled = s.running || state.syncing || noBank;
+  button.title = noBank ? "Connect a bank first" : "";
   button.textContent = s.running || state.syncing ? "Syncing…" : "Sync now";
+}
+
+// ---- Connecting a bank (Plaid Link) ----------------------------------
+
+function setConnecting(label) {
+  const button = $("#connect-bank");
+  button.disabled = label !== null;
+  button.textContent = label || "Connect a bank";
+}
+
+async function connectBank() {
+  if (typeof Plaid === "undefined") {
+    alert("Plaid Link could not be loaded. Check your internet connection and reload the page.");
+    return;
+  }
+  setConnecting("Opening…");
+  try {
+    const { link_token } = await getJson("/api/plaid/link-token", { method: "POST" });
+    Plaid.create({
+      token: link_token,
+      onSuccess: finishConnect,
+      // Also fires when the window is simply closed (error is null then).
+      onExit: (error) => {
+        if (error) alert(error.display_message || error.error_message || "Plaid Link closed with an error.");
+        setConnecting(null);
+      },
+    }).open();
+  } catch (error) {
+    alert(`Could not start Plaid Link: ${error.message}`);
+    setConnecting(null);
+  }
+}
+
+async function finishConnect(publicToken, metadata) {
+  setConnecting("Importing…");
+  try {
+    const result = await getJson("/api/plaid/exchange", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        public_token: publicToken,
+        institution_name: metadata && metadata.institution ? metadata.institution.name : null,
+      }),
+    });
+    state.sync = result.status;
+    await loadData();
+  } catch (error) {
+    alert(`Could not save the connection: ${error.message}`);
+  } finally {
+    setConnecting(null);
+  }
 }
 
 // Store a fresh status; reload the data if a sync finished since we last looked.
@@ -416,20 +488,28 @@ function renderCategoryList() {
     </button></li>`).join("");
 }
 
-function renderAccounts() {
-  $("#accounts").innerHTML = state.accounts.map((a) => {
-    if (state.editing === a.account_id) {
-      return `<div class="account-row" data-id="${esc(a.account_id)}">
-        <input id="nickname-input" maxlength="60" value="${esc(a.nickname || "")}"
-               placeholder="${esc(a.default_label)}" aria-label="Card name">
-        <button class="btn primary" data-action="save">Save</button>
-        <button class="btn" data-action="cancel">Cancel</button></div>`;
-    }
-    const sub = a.nickname ? `<div class="acct-sub">${esc(a.default_label)}</div>` : "";
+function accountRow(a) {
+  if (state.editing === a.account_id) {
     return `<div class="account-row" data-id="${esc(a.account_id)}">
-      <div class="acct-name">${esc(a.label)}${sub}</div>
-      <button class="btn" data-action="rename">Rename</button></div>`;
-  }).join("") || `<p class="hint">No credit cards found.</p>`;
+      <input id="nickname-input" maxlength="60" value="${esc(a.nickname || "")}"
+             placeholder="${esc(a.default_label)}" aria-label="Card name">
+      <button class="btn primary" data-action="save">Save</button>
+      <button class="btn" data-action="cancel">Cancel</button></div>`;
+  }
+  const sub = a.nickname ? `<div class="acct-sub">${esc(a.default_label)}</div>` : "";
+  return `<div class="account-row" data-id="${esc(a.account_id)}">
+    <div class="acct-name">${esc(a.label)}${sub}</div>
+    <button class="btn" data-action="rename">Rename</button></div>`;
+}
+
+function renderAccounts() {
+  $("#accounts").innerHTML = state.items.map((item) => {
+    const cards = state.accounts.filter((a) => a.item_id === item.item_id);
+    return `<div class="bank">
+      <div class="bank-name">${esc(item.institution_name || "Bank")}<span class="sub">connected ${esc(localTime(item.created_at))}</span></div>
+      ${cards.map(accountRow).join("") || `<p class="hint">No credit cards found at this bank yet.</p>`}
+    </div>`;
+  }).join("") || `<p class="hint">No banks connected yet.</p>`;
   const input = $("#nickname-input");
   if (input) { input.focus(); input.select(); }
 }
@@ -578,6 +658,7 @@ async function saveNickname(accountId) {
 }
 
 $("#sync-now").addEventListener("click", syncNow);
+$("#connect-bank").addEventListener("click", connectBank);
 $("#interval-select").addEventListener("change", (e) => changeInterval(e.target.value));
 $("#prev-month").addEventListener("click", () => stepMonth(-1));
 $("#next-month").addEventListener("click", () => stepMonth(1));

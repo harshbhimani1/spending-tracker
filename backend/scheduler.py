@@ -89,7 +89,8 @@ class Scheduler:
         with closing(database.connect()) as conn:
             interval = self._interval(conn)
             last_attempt = database.last_sync_attempt(conn)
-        if INTERVALS[interval] is None:
+            has_banks = bool(database.list_items(conn))
+        if INTERVALS[interval] is None or not has_banks:
             return False
         if last_attempt is None:
             return True

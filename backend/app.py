@@ -4,11 +4,13 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated, Optional
 
+import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import database
+import plaid_client
 from scheduler import INTERVALS, Scheduler, SyncBusy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -105,6 +107,71 @@ def trend():
 def accounts():
     with db() as conn:
         return {"accounts": database.list_accounts(conn)}
+
+
+@app.get("/api/items")
+def items():
+    """Banks connected in the active environment (never exposes access tokens)."""
+    with db() as conn:
+        banks = database.list_items(conn)
+    return {
+        "environment": database.active_environment(),
+        "items": [
+            {
+                "item_id": b["item_id"],
+                "institution_name": b["institution_name"],
+                "created_at": b["created_at"],
+            }
+            for b in banks
+        ],
+    }
+
+
+def call_plaid(path, body):
+    try:
+        return plaid_client.post(path, body)
+    except (RuntimeError, requests.RequestException) as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/plaid/link-token")
+def create_link_token():
+    """Start a Plaid Link session; the page hands the token to Plaid's Link widget."""
+    data = call_plaid("/link/token/create", {
+        "client_name": "Spending Tracker",
+        "language": "en",
+        "country_codes": ["US"],
+        "user": {"client_user_id": "local-user"},
+        "products": ["transactions"],
+        # Fixed when the bank is first linked: ask for the most history Plaid allows.
+        "transactions": {"days_requested": 730},
+    })
+    return {"link_token": data["link_token"]}
+
+
+class PublicTokenExchange(BaseModel):
+    public_token: str = Field(min_length=1, max_length=200)
+    institution_name: Optional[str] = Field(default=None, max_length=100)
+
+
+@app.post("/api/plaid/exchange")
+def exchange_public_token(body: PublicTokenExchange):
+    """Trade Link's one-time public token for a permanent access token, save the
+    bank, and pull its first transactions."""
+    data = call_plaid("/item/public_token/exchange", {"public_token": body.public_token})
+    with db() as conn, conn:
+        database.add_item(
+            conn, data["item_id"], data["access_token"],
+            body.institution_name, database.active_environment(),
+        )
+    # Plaid can take a while to prepare a new bank's history. If this first sync
+    # fails or another one is running, the scheduler retries and the status
+    # reports it, so the bank is still saved either way.
+    try:
+        scheduler.run_now()
+    except Exception:
+        pass
+    return {"item_id": data["item_id"], "status": scheduler.status()}
 
 
 @app.get("/api/sync")

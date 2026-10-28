@@ -1,64 +1,38 @@
 #!/usr/bin/env python3
-"""Connect to Plaid's sandbox test bank and save the access token for later use."""
-import json
-import os
-from pathlib import Path
+"""Connect Plaid's sandbox test bank without the Link window, for quick testing.
 
-import requests
-from dotenv import load_dotenv
+Each run adds another test bank. Real banks are connected from the dashboard.
+"""
+from contextlib import closing
 
-load_dotenv()
+import database
+import plaid_client
 
-client_id = os.getenv("PLAID_CLIENT_ID")
-key = os.getenv("PLAID_SECRET")
-base_url = f"https://{os.getenv('PLAID_ENV', 'sandbox')}.plaid.com"
+if plaid_client.ENVIRONMENT != "sandbox":
+    raise SystemExit("This shortcut only works with PLAID_ENV=sandbox; use Connect a bank in the dashboard.")
 
 # First Platypus Bank, Plaid's sandbox test institution
 institution_id = "ins_109508"
-token_file = Path(__file__).parent / "plaid_token.json"
+institution_name = "First Platypus Bank"
 
 # Step 1: sandbox shortcut for the Link flow, hands back a public token
-response = requests.post(
-    f"{base_url}/sandbox/public_token/create",
-    json={
-        "client_id": client_id,
-        "secret": key,
-        "institution_id": institution_id,
-        "initial_products": ["transactions"],
-    },
-    timeout=10,
-)
-response.raise_for_status()
-public_token = response.json()["public_token"]
+public_token = plaid_client.post("/sandbox/public_token/create", {
+    "institution_id": institution_id,
+    "initial_products": ["transactions"],
+})["public_token"]
 print(f"got public token for {institution_id}")
 
 # Step 2: trade the short-lived public token for a permanent access token
-response = requests.post(
-    f"{base_url}/item/public_token/exchange",
-    json={
-        "client_id": client_id,
-        "secret": key,
-        "public_token": public_token,
-    },
-    timeout=10,
-)
-response.raise_for_status()
-data = response.json()
+data = plaid_client.post("/item/public_token/exchange", {"public_token": public_token})
 access_token = data["access_token"]
 item_id = data["item_id"]
 
-token_file.write_text(json.dumps({"access_token": access_token, "item_id": item_id}, indent=2))
-token_file.chmod(0o600)
-print(f"saved access token for item {item_id} to {token_file.name}")
+with closing(database.connect()) as conn, conn:
+    database.add_item(conn, item_id, access_token, institution_name, "sandbox")
+print(f"saved item {item_id} to the database")
 
 # Step 3: confirm the token works by pulling the linked accounts
-response = requests.post(
-    f"{base_url}/accounts/get",
-    json={"client_id": client_id, "secret": key, "access_token": access_token},
-    timeout=10,
-)
-response.raise_for_status()
-accounts = response.json()["accounts"]
+accounts = plaid_client.post("/accounts/get", {"access_token": access_token})["accounts"]
 print(f"linked {len(accounts)} accounts:")
 for account in accounts:
     balance = account["balances"]["current"]

@@ -1,20 +1,14 @@
-import json
-import os
-import requests
 from contextlib import closing
-from pathlib import Path
-from dotenv import load_dotenv
 
 import database
-
-load_dotenv()
-
-BASE_URL = f"https://{os.getenv('PLAID_ENV', 'sandbox')}.plaid.com"
+import plaid_client
 
 # Money leaving the card that isn't spending: card payments, transfers.
 NON_SPENDING = {"LOAN_PAYMENTS", "TRANSFER_IN", "TRANSFER_OUT"}
 
-token_file = Path(__file__).parent / "plaid_token.json"
+
+class NoBanksError(RuntimeError):
+    """Nothing to sync because no bank has been connected yet."""
 
 
 def is_purchase(transaction, credit_ids):
@@ -25,42 +19,25 @@ def is_purchase(transaction, credit_ids):
     return category not in NON_SPENDING
 
 
-def check_plaid(response):
-    """Like raise_for_status, but includes Plaid's own explanation of the error."""
-    if response.ok:
-        return
-    try:
-        detail = response.json().get("error_message")
-    except ValueError:
-        detail = None
-    raise RuntimeError(f"Plaid error {response.status_code}: {detail or response.reason}")
+def fetch_institution_name(access_token):
+    item = plaid_client.post("/item/get", {"access_token": access_token})["item"]
+    institution = plaid_client.post("/institutions/get_by_id", {
+        "institution_id": item["institution_id"],
+        "country_codes": ["US"],
+    })["institution"]
+    return institution["name"]
 
 
-def sync_transactions():
-    """Pull new and changed purchases from Plaid into the database.
+def sync_item(item):
+    """Pull new and changed purchases for one bank into the database.
 
-    Returns {"added", "modified", "removed"} counts. Raises on any failure; the
-    saved cursor only ever advances together with the writes it covers.
+    Returns {"added", "modified", "removed"} counts. The saved cursor only ever
+    advances together with the writes it covers.
     """
-    if not token_file.exists():
-        raise FileNotFoundError(f"{token_file.name} not found; run connect_bank.py first")
+    item_id = item["item_id"]
+    access = {"access_token": item["access_token"]}
 
-    token_data = json.loads(token_file.read_text())
-    item_id = token_data["item_id"]
-    credentials = {
-        "client_id": os.getenv("PLAID_CLIENT_ID"),
-        "secret": os.getenv("PLAID_SECRET"),
-        "access_token": token_data["access_token"],
-    }
-
-    response = requests.post(
-        f"{BASE_URL}/accounts/get",
-        json=credentials,
-        timeout=30
-    )
-    check_plaid(response)
-
-    accounts = response.json()["accounts"]
+    accounts = plaid_client.post("/accounts/get", access)["accounts"]
     credit_ids = {a["account_id"] for a in accounts if a["type"] == "credit"}
 
     counts = {"added": 0, "modified": 0, "removed": 0}
@@ -70,14 +47,16 @@ def sync_transactions():
             database.upsert_accounts(conn, item_id, accounts)
         cursor = database.get_cursor(conn, item_id)
 
+        # Banks imported before names were stored get theirs filled in here.
+        if not item["institution_name"]:
+            try:
+                with conn:
+                    database.set_institution_name(conn, item_id, fetch_institution_name(item["access_token"]))
+            except Exception:
+                pass  # cosmetic only; try again next sync
+
         while True:
-            response = requests.post(
-                f"{BASE_URL}/transactions/sync",
-                json={**credentials, "cursor": cursor},
-                timeout=60
-            )
-            check_plaid(response)
-            data = response.json()
+            data = plaid_client.post("/transactions/sync", {**access, "cursor": cursor}, timeout=60)
 
             # A modified transaction may stop qualifying (e.g. recategorized as a
             # transfer), so anything modified that isn't a purchase is dropped.
@@ -109,6 +88,33 @@ def sync_transactions():
     return counts
 
 
+def sync_transactions():
+    """Sync every connected bank. Returns the summed {"added", "modified", "removed"}.
+
+    A bank that fails doesn't stop the others; the failures are raised together
+    once the rest have finished.
+    """
+    with closing(database.connect()) as conn:
+        items = database.list_items(conn)
+    if not items:
+        raise NoBanksError("No bank connected yet. Use Connect a bank first.")
+
+    counts = {"added": 0, "modified": 0, "removed": 0}
+    failures = []
+    for item in items:
+        try:
+            item_counts = sync_item(item)
+        except Exception as exc:
+            failures.append(f"{item['institution_name'] or 'Bank'}: {exc}")
+            continue
+        for key in counts:
+            counts[key] += item_counts[key]
+
+    if failures:
+        raise RuntimeError("; ".join(failures))
+    return counts
+
+
 def sync_and_log():
     """Run a sync and record the attempt, so the dashboard can show when it last worked."""
     started_at = database.utc_now()
@@ -126,8 +132,8 @@ def sync_and_log():
 def main():
     try:
         counts = sync_and_log()
-    except FileNotFoundError as exc:
-        raise SystemExit(str(exc))
+    except NoBanksError as exc:
+        raise SystemExit(f"{exc} Run connect_bank.py or use the dashboard.")
 
     print(f"Synced: {counts['added']} added, {counts['modified']} modified, {counts['removed']} removed")
 
