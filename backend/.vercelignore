@@ -1,0 +1,9 @@
+# Never upload secrets or local-only files if deploying from this machine.
+.env
+.env.*
+!.env.example
+.venv
+*.db
+tests
+__pycache__
+.pytest_cache

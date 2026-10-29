@@ -527,6 +527,9 @@ function renderSync() {
     : "Not synced yet";
   let next = s.interval === "off" ? "auto-refresh is off"
     : s.next_run_at ? `next sync ${relativeTime(s.next_run_at)}` : "first sync starting soon";
+  if (s.last_attempt && s.last_attempt.status === "success" && s.last_attempt.complete === false) {
+    next = "still importing older purchases (Sync now continues it)";
+  }
   if (s.running) next = "syncing now…";
   $("#sync-line").innerHTML = `${updated} · ${esc(next)}` + (failed && !s.running
     ? `<div class="error">Last attempt failed (${esc(relativeTime(s.last_attempt.finished_at))}): ${esc(s.last_attempt.error || "unknown error")}</div>`

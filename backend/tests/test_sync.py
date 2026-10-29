@@ -41,7 +41,7 @@ def test_sync_writes_only_to_the_syncing_user(fake_plaid):
         item = database.get_item(conn, "alice", "item-a")
     counts = get_transactions.sync_item("alice", item)
 
-    assert counts == {"added": 3, "modified": 1, "removed": 1}
+    assert counts == {"added": 3, "modified": 1, "removed": 1, "complete": True}
     with database.connect() as conn:
         rows = {t["transaction_id"]: t["amount_cents"] for t in database.recent_transactions(conn, "alice")}
         assert rows == {"n1": 1500, "n2": 800, "n3": 100}  # modified wins; non-purchases skipped; removed gone
@@ -111,7 +111,7 @@ def test_scheduler_only_runs_users_who_are_due(fake_plaid):
     with database.connect() as conn:
         database.ensure_user(conn, "carol")  # no banks
     synced = []
-    scheduler = Scheduler(sync=lambda user_id: synced.append(user_id) or {"added": 0, "modified": 0, "removed": 0})
+    scheduler = Scheduler(sync=lambda user_id, deadline=None: synced.append(user_id) or {"added": 0, "modified": 0, "removed": 0})
     scheduler.set_interval("bob", "off")
 
     scheduler.run_due()
@@ -134,7 +134,7 @@ def test_scheduler_status_and_settings_are_per_user(fake_plaid):
 
 def test_one_users_sync_does_not_block_anothers(fake_plaid):
     setup_two_users(fake_plaid)
-    scheduler = Scheduler(sync=lambda user_id: {"added": 0, "modified": 0, "removed": 0})
+    scheduler = Scheduler(sync=lambda user_id, deadline=None: {"added": 0, "modified": 0, "removed": 0})
     with scheduler.paused("alice"):
         with pytest.raises(SyncBusy):
             scheduler.run_now("alice")

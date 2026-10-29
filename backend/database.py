@@ -108,6 +108,16 @@ CREATE TABLE IF NOT EXISTS sync_log (
     error       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sync_log_user ON sync_log(user_id, id DESC);
+-- FALSE when a sync stopped early (time budget) with more still to fetch.
+ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS complete BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- One sync per user at a time, across every running copy of the app (Vercel
+-- may run several). A lease rather than a held lock, so a copy that dies
+-- mid-sync can't block that user forever, and it works through a connection pooler.
+CREATE TABLE IF NOT EXISTS sync_locks (
+    user_id      TEXT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    locked_until TIMESTAMPTZ NOT NULL
+);
 """
 
 
@@ -382,19 +392,44 @@ def ignored_account_ids(conn, user_id):
 
 
 def log_sync(conn, user_id, started_at, status, counts=None, error=None):
-    """Record one sync attempt. `counts` has added/modified/removed on success."""
+    """Record one sync attempt. `counts` has added/modified/removed (and complete) on success."""
     counts = counts or {}
     conn.execute(
         """
-        INSERT INTO sync_log (user_id, started_at, finished_at, status, added, modified, removed, error)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO sync_log (user_id, started_at, finished_at, status, added, modified, removed, error, complete)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             user_id, started_at, utc_now(), status,
             counts.get("added", 0), counts.get("modified", 0), counts.get("removed", 0),
-            error,
+            error, counts.get("complete", True),
         ),
     )
+
+
+def try_lock_user(conn, user_id, seconds):
+    """Take the user's sync lease for `seconds` unless someone holds a live one. True if taken."""
+    row = conn.execute(
+        """
+        INSERT INTO sync_locks (user_id, locked_until) VALUES (%s, now() + make_interval(secs => %s))
+        ON CONFLICT (user_id) DO UPDATE SET locked_until = EXCLUDED.locked_until
+        WHERE sync_locks.locked_until < now()
+        RETURNING user_id
+        """,
+        (user_id, seconds),
+    ).fetchone()
+    return row is not None
+
+
+def unlock_user(conn, user_id):
+    conn.execute("DELETE FROM sync_locks WHERE user_id = %s", (user_id,))
+
+
+def is_user_locked(conn, user_id):
+    row = conn.execute(
+        "SELECT 1 FROM sync_locks WHERE user_id = %s AND locked_until > now()", (user_id,)
+    ).fetchone()
+    return row is not None
 
 
 def last_sync_attempt(conn, user_id, status=None):

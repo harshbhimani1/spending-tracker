@@ -1,5 +1,7 @@
 import calendar
+import hmac
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -14,10 +16,14 @@ import auth
 import database
 import plaid_client
 import token_crypto
-from scheduler import INTERVALS, Scheduler, SyncBusy
+from scheduler import INTERVALS, Scheduler, SyncBusy, background_thread_enabled
 
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_TREND_MONTHS = 12
+# Time budgets (seconds) for syncs started by a request, so they finish well
+# inside the host's request time limit; anything left continues next sync.
+REQUEST_SYNC_SECONDS = int(os.getenv("REQUEST_SYNC_SECONDS", "60"))
+CRON_SYNC_SECONDS = int(os.getenv("CRON_SYNC_SECONDS", "240"))
 
 scheduler = Scheduler()
 
@@ -29,9 +35,14 @@ async def lifespan(app):
     database.init_schema()
     with database.connect() as conn:
         database.encrypt_plaintext_tokens(conn)
-    scheduler.start()
+    if background_thread_enabled():
+        scheduler.start()
     yield
     scheduler.stop()
+
+
+def request_deadline():
+    return time.monotonic() + REQUEST_SYNC_SECONDS
 
 
 app = FastAPI(title="Spending dashboard", lifespan=lifespan)
@@ -178,33 +189,40 @@ def remove_bank(user: User, item_id: str):
     If Plaid can't be told, nothing is deleted, so the bank never ends up
     removed here while still connected (and billed) there.
     """
-    with scheduler.paused(user):
-        with db() as conn:
-            bank = database.get_item(conn, user, item_id)
-        if bank is None:
-            raise HTTPException(status_code=404, detail="Unknown bank")
-        if bank["access_token"] is None:
-            raise HTTPException(
-                status_code=409,
-                detail="This bank's saved connection can't be decrypted, so it can't be disconnected at Plaid. "
-                       "Restore the previous encryption key, or remove the connection in the Plaid dashboard.",
-            )
-        try:
-            plaid_client.post("/item/remove", {"access_token": bank["access_token"]})
-        except plaid_client.PlaidError as exc:
-            # Already gone on Plaid's side (e.g. revoked at the bank): nothing to revoke.
-            if exc.code not in ("ITEM_NOT_FOUND", "INVALID_ACCESS_TOKEN"):
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Could not disconnect the bank at Plaid, so nothing was deleted. {exc}",
-                )
-        except requests.RequestException:
+    try:
+        with scheduler.paused(user):
+            return _remove_bank(user, item_id)
+    except SyncBusy:
+        raise HTTPException(status_code=409, detail="A sync is running for your account; try again in a minute.")
+
+
+def _remove_bank(user, item_id):
+    with db() as conn:
+        bank = database.get_item(conn, user, item_id)
+    if bank is None:
+        raise HTTPException(status_code=404, detail="Unknown bank")
+    if bank["access_token"] is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This bank's saved connection can't be decrypted, so it can't be disconnected at Plaid. "
+                   "Restore the previous encryption key, or remove the connection in the Plaid dashboard.",
+        )
+    try:
+        plaid_client.post("/item/remove", {"access_token": bank["access_token"]})
+    except plaid_client.PlaidError as exc:
+        # Already gone on Plaid's side (e.g. revoked at the bank): nothing to revoke.
+        if exc.code not in ("ITEM_NOT_FOUND", "INVALID_ACCESS_TOKEN"):
             raise HTTPException(
                 status_code=502,
-                detail="Could not reach Plaid, so nothing was deleted. Check your connection and try again.",
+                detail=f"Could not disconnect the bank at Plaid, so nothing was deleted. {exc}",
             )
-        with db() as conn:
-            deleted = database.remove_item(conn, user, item_id)
+    except requests.RequestException:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not reach Plaid, so nothing was deleted. Check your connection and try again.",
+        )
+    with db() as conn:
+        deleted = database.remove_item(conn, user, item_id)
     return {"deleted": deleted or 0}
 
 
@@ -249,7 +267,7 @@ def exchange_public_token(user: User, body: PublicTokenExchange):
     # fails or another one is running, the scheduler retries and the status
     # reports it, so the bank is still saved either way.
     try:
-        scheduler.run_now(user)
+        scheduler.run_now(user, deadline=request_deadline())
     except Exception:
         pass
     return {"item_id": data["item_id"], "status": scheduler.status(user)}
@@ -276,12 +294,25 @@ def set_sync_interval(user: User, update: IntervalUpdate):
 def sync_now(user: User):
     """Run the user's sync right now and wait for it. Failures are reported in the status."""
     try:
-        scheduler.run_now(user)
+        scheduler.run_now(user, deadline=request_deadline())
     except SyncBusy:
         raise HTTPException(status_code=409, detail="A sync is already running")
     except Exception:
         pass  # already recorded in sync_log; the status below carries the error
     return scheduler.status(user)
+
+
+@app.get("/api/cron/sync")
+def cron_sync(authorization: Annotated[Optional[str], Header()] = None):
+    """Runs every user's sync that's due. Called on a schedule by Vercel Cron,
+    which sends `Authorization: Bearer <CRON_SECRET>`. Off unless CRON_SECRET is set.
+    Returns counts only, never anyone's data."""
+    secret = os.getenv("CRON_SECRET", "")
+    if not secret:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if not hmac.compare_digest(auth.bearer_token(authorization).encode(), secret.encode()):
+        raise HTTPException(status_code=401, detail="Invalid cron secret")
+    return scheduler.run_due(deadline=time.monotonic() + CRON_SYNC_SECONDS)
 
 
 @app.delete("/api/accounts/{account_id}")

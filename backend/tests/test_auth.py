@@ -94,7 +94,8 @@ def client():
 def protected_routes():
     for route in app_module.app.routes:
         path = getattr(route, "path", "")
-        if path.startswith("/api/") and path != "/api/config":
+        # /api/config is public; /api/cron/sync has its own secret (tested in test_cron.py).
+        if path.startswith("/api/") and path not in ("/api/config", "/api/cron/sync"):
             for method in route.methods - {"HEAD", "OPTIONS"}:
                 yield method, path.replace("{item_id}", "x").replace("{account_id}", "x")
 

@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 import database
 import plaid_client
@@ -29,11 +30,17 @@ def fetch_institution_name(access_token):
     return institution["name"]
 
 
-def sync_item(user_id, item):
+def past(deadline):
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def sync_item(user_id, item, deadline=None):
     """Pull new and changed purchases for one of the user's banks into the database.
 
-    Returns {"added", "modified", "removed"} counts. The saved cursor only ever
-    advances together with the writes it covers.
+    Returns {"added", "modified", "removed", "complete"}. The saved cursor only
+    ever advances together with the writes it covers, so if the time budget
+    (`deadline`, a time.monotonic() value) runs out between pages, the next
+    sync simply carries on from there; "complete" is False in that case.
     """
     item_id = item["item_id"]
     if item["access_token"] is None:
@@ -42,7 +49,7 @@ def sync_item(user_id, item):
 
     accounts = plaid_client.post("/accounts/get", access)["accounts"]
 
-    counts = {"added": 0, "modified": 0, "removed": 0}
+    counts = {"added": 0, "modified": 0, "removed": 0, "complete": True}
 
     with database.connect() as conn:
         with conn.transaction():
@@ -88,15 +95,19 @@ def sync_item(user_id, item):
 
             if not data["has_more"]:
                 break
+            if past(deadline):
+                counts["complete"] = False  # out of time; the saved cursor resumes here next sync
+                break
 
     return counts
 
 
-def sync_user(user_id):
-    """Sync every bank the user has connected. Returns the summed counts.
+def sync_user(user_id, deadline=None):
+    """Sync every bank the user has connected. Returns summed counts plus "complete".
 
     A bank that fails doesn't stop the others; the failures are raised together
-    once the rest have finished.
+    once the rest have finished. Banks not reached before the deadline are
+    left for the next sync ("complete" is False).
     """
     with database.connect() as conn:
         items = database.list_items(conn, user_id)
@@ -104,26 +115,31 @@ def sync_user(user_id):
         raise NoBanksError("No bank connected yet. Use Connect a bank first.")
 
     counts = {"added": 0, "modified": 0, "removed": 0}
+    complete = True
     failures = []
     for item in items:
+        if past(deadline):
+            complete = False
+            break
         try:
-            item_counts = sync_item(user_id, item)
+            item_counts = sync_item(user_id, item, deadline)
         except Exception as exc:
             failures.append(f"{item['institution_name'] or 'Bank'}: {exc}")
             continue
         for key in counts:
             counts[key] += item_counts[key]
+        complete = complete and item_counts["complete"]
 
     if failures:
         raise RuntimeError("; ".join(failures))
-    return counts
+    return {**counts, "complete": complete}
 
 
-def sync_and_log(user_id):
+def sync_and_log(user_id, deadline=None):
     """Run a sync for one user and record the attempt, so their dashboard can show when it last worked."""
     started_at = database.utc_now()
     try:
-        counts = sync_user(user_id)
+        counts = sync_user(user_id, deadline)
     except Exception as exc:
         with database.connect() as conn:
             database.log_sync(conn, user_id, started_at, "error", error=str(exc)[:300])
