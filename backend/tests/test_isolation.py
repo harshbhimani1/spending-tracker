@@ -77,8 +77,9 @@ def test_upserts_with_another_users_ids_cannot_take_over_their_rows():
         database.upsert_accounts(conn, "alice", "item-a", [{"account_id": "acct-b1", "name": "Hijack", "type": "credit", "mask": "0000"}])
         database.upsert_transactions(conn, "alice", [txn("tb1", "acct-a1", 0.01)])
 
-        owner = conn.execute("SELECT user_id, access_token FROM items WHERE item_id = 'item-b'").fetchone()
-        assert owner == {"user_id": "bob", "access_token": "access-sandbox-item-b"}
+        owner = conn.execute("SELECT user_id FROM items WHERE item_id = 'item-b'").fetchone()
+        assert owner == {"user_id": "bob"}
+        assert database.get_item(conn, "bob", "item-b")["access_token"] == "access-sandbox-item-b"
         card = conn.execute("SELECT user_id, item_id, name FROM accounts WHERE account_id = 'acct-b1'").fetchone()
         assert card == {"user_id": "bob", "item_id": "item-b", "name": "Card acct-b1"}
         purchase = conn.execute("SELECT user_id, amount_cents FROM transactions WHERE transaction_id = 'tb1'").fetchone()

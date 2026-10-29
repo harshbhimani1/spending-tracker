@@ -36,6 +36,8 @@ def sync_item(user_id, item):
     advances together with the writes it covers.
     """
     item_id = item["item_id"]
+    if item["access_token"] is None:
+        raise RuntimeError(f"its saved connection can't be read ({item['token_error']}); reconnect this bank")
     access = {"access_token": item["access_token"]}
 
     accounts = plaid_client.post("/accounts/get", access)["accounts"]

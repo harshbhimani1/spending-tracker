@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 import auth
 import database
 import plaid_client
+import token_crypto
 from scheduler import INTERVALS, Scheduler, SyncBusy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -23,7 +24,11 @@ scheduler = Scheduler()
 
 @asynccontextmanager
 async def lifespan(app):
+    # Refuse to start without an encryption key, rather than store bank tokens in plain text.
+    token_crypto.check_key()
     database.init_schema()
+    with database.connect() as conn:
+        database.encrypt_plaintext_tokens(conn)
     scheduler.start()
     yield
     scheduler.stop()
@@ -178,6 +183,12 @@ def remove_bank(user: User, item_id: str):
             bank = database.get_item(conn, user, item_id)
         if bank is None:
             raise HTTPException(status_code=404, detail="Unknown bank")
+        if bank["access_token"] is None:
+            raise HTTPException(
+                status_code=409,
+                detail="This bank's saved connection can't be decrypted, so it can't be disconnected at Plaid. "
+                       "Restore the previous encryption key, or remove the connection in the Plaid dashboard.",
+            )
         try:
             plaid_client.post("/item/remove", {"access_token": bank["access_token"]})
         except plaid_client.PlaidError as exc:

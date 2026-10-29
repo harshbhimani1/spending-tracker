@@ -17,6 +17,8 @@ import psycopg
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
 
+import token_crypto
+
 load_dotenv()
 
 DEFAULT_DATABASE_URL = "postgresql://localhost/spending_tracker_dev"
@@ -44,7 +46,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS items (
     item_id          TEXT PRIMARY KEY,
     user_id          TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    access_token     TEXT NOT NULL,
+    access_token     TEXT NOT NULL,  -- always encrypted (see token_crypto.py)
     institution_name TEXT,
     environment      TEXT NOT NULL,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -158,17 +160,58 @@ def add_item(conn, user_id, item_id, access_token, institution_name, environment
             institution_name = COALESCE(EXCLUDED.institution_name, items.institution_name)
         WHERE items.user_id = EXCLUDED.user_id
         """,
-        (item_id, user_id, access_token, institution_name, environment),
+        (item_id, user_id, token_crypto.encrypt(access_token, user_id, item_id), institution_name, environment),
     )
 
 
+def _readable_item(row):
+    """An items row with its access token decrypted for use.
+
+    If the token can't be decrypted (e.g. the encryption key was lost or
+    changed), access_token is None and token_error explains, so the rest of
+    the user's dashboard keeps working and only this bank reports a problem.
+    """
+    item = {**row, "created_at": iso(row["created_at"]), "token_error": None}
+    try:
+        item["access_token"] = token_crypto.decrypt(row["access_token"], row["user_id"], row["item_id"])
+    except token_crypto.TokenDecryptError as exc:
+        item["access_token"] = None
+        item["token_error"] = str(exc)
+    return item
+
+
 def list_items(conn, user_id):
-    """The user's banks in the active environment, oldest first. Includes access tokens."""
+    """The user's banks in the active environment, oldest first. Includes decrypted access tokens."""
     rows = conn.execute(
         "SELECT * FROM items WHERE user_id = %s AND environment = %s ORDER BY created_at, item_id",
         (user_id, active_environment()),
     ).fetchall()
-    return [{**r, "created_at": iso(r["created_at"])} for r in rows]
+    return [_readable_item(r) for r in rows]
+
+
+def encrypt_plaintext_tokens(conn):
+    """Encrypt any tokens stored before encryption existed. Returns how many."""
+    rows = conn.execute("SELECT item_id, user_id, access_token FROM items").fetchall()
+    plain = [r for r in rows if not token_crypto.is_encrypted(r["access_token"])]
+    with conn.transaction():
+        for r in plain:
+            conn.execute(
+                "UPDATE items SET access_token = %s WHERE item_id = %s",
+                (token_crypto.encrypt(r["access_token"], r["user_id"], r["item_id"]), r["item_id"]),
+            )
+    return len(plain)
+
+
+def reencrypt_tokens(conn):
+    """Re-encrypt every stored token with the newest key (after adding one). Returns how many."""
+    rows = conn.execute("SELECT item_id, access_token FROM items").fetchall()
+    with conn.transaction():
+        for r in rows:
+            conn.execute(
+                "UPDATE items SET access_token = %s WHERE item_id = %s",
+                (token_crypto.reencrypt(r["access_token"]), r["item_id"]),
+            )
+    return len(rows)
 
 
 def get_item(conn, user_id, item_id):

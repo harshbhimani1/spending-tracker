@@ -16,6 +16,9 @@ os.environ["LOCAL_USER_ID"] = "local-dev"
 os.environ["SUPABASE_URL"] = "https://test-project.supabase.co"
 os.environ["SUPABASE_PUBLISHABLE_KEY"] = "sb_publishable_test"
 os.environ["ALLOWED_EMAILS"] = ""
+# A throwaway encryption key just for this test run.
+from cryptography.fernet import Fernet  # noqa: E402
+os.environ["TOKEN_ENCRYPTION_KEYS"] = Fernet.generate_key().decode()
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
