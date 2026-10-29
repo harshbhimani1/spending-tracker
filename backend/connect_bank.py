@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Connect Plaid's sandbox test bank without the Link window, for quick testing.
 
+Adds the bank to one user: the id given as an argument, or the local dev user.
 Each run adds another test bank. Real banks are connected from the dashboard.
 """
-from contextlib import closing
+import os
+import sys
 
 import database
 import plaid_client
 
 if plaid_client.ENVIRONMENT != "sandbox":
     raise SystemExit("This shortcut only works with PLAID_ENV=sandbox; use Connect a bank in the dashboard.")
+
+user_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv("LOCAL_USER_ID", "local-dev")
 
 # First Platypus Bank, Plaid's sandbox test institution
 institution_id = "ins_109508"
@@ -27,9 +31,11 @@ data = plaid_client.post("/item/public_token/exchange", {"public_token": public_
 access_token = data["access_token"]
 item_id = data["item_id"]
 
-with closing(database.connect()) as conn, conn:
-    database.add_item(conn, item_id, access_token, institution_name, "sandbox")
-print(f"saved item {item_id} to the database")
+database.init_schema()
+with database.connect() as conn:
+    database.ensure_user(conn, user_id)
+    database.add_item(conn, user_id, item_id, access_token, institution_name, "sandbox")
+print(f"saved item {item_id} to the database for user {user_id}")
 
 # Step 3: confirm the token works by pulling the linked accounts
 accounts = plaid_client.post("/accounts/get", {"access_token": access_token})["accounts"]

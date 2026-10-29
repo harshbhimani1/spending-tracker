@@ -8,3 +8,6 @@ plaid_token.json
 
 # Local SQLite database
 *.db
+
+# Test runner cache
+.pytest_cache/

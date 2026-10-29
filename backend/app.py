@@ -1,11 +1,12 @@
 import calendar
-from contextlib import asynccontextmanager, closing
+import os
+from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,7 @@ scheduler = Scheduler()
 
 @asynccontextmanager
 async def lifespan(app):
+    database.init_schema()
     scheduler.start()
     yield
     scheduler.stop()
@@ -32,9 +34,27 @@ Month = Annotated[str, Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
 
 
 def db():
-    # Each request gets its own connection; sqlite3 connections can't be
-    # shared across the threads FastAPI runs sync endpoints on.
-    return closing(database.connect())
+    return database.connect()
+
+
+_known_users = set()
+
+
+def current_user() -> str:
+    """Who is making this request. Every endpoint below is scoped to this user.
+
+    Placeholder until sign-in exists (Phase 2): every request is the single
+    local dev user from .env, so this must not be exposed beyond localhost.
+    """
+    user_id = os.getenv("LOCAL_USER_ID", "local-dev")
+    if user_id not in _known_users:
+        with db() as conn:
+            database.ensure_user(conn, user_id)
+        _known_users.add(user_id)
+    return user_id
+
+
+User = Annotated[str, Depends(current_user)]
 
 
 def previous_month(month):
@@ -48,19 +68,19 @@ def index():
 
 
 @app.get("/api/months")
-def months():
+def months(user: User):
     with db() as conn:
-        return {"months": database.list_months(conn)}
+        return {"months": database.list_months(conn, user)}
 
 
 @app.get("/api/overview")
-def overview(month: Month):
+def overview(user: User, month: Month):
     with db() as conn:
-        count, total = database.month_totals(conn, month)
-        _, previous_total = database.month_totals(conn, previous_month(month))
-        top_merchant = database.month_top_merchant(conn, month)
-        categories = database.month_categories(conn, month)
-        daily = database.month_daily(conn, month)
+        count, total = database.month_totals(conn, user, month)
+        _, previous_total = database.month_totals(conn, user, previous_month(month))
+        top_merchant = database.month_top_merchant(conn, user, month)
+        categories = database.month_categories(conn, user, month)
+        daily = database.month_daily(conn, user, month)
 
     # A month still in progress is averaged over the days elapsed so far.
     today = date.today()
@@ -82,15 +102,15 @@ def overview(month: Month):
 
 
 @app.get("/api/transactions")
-def transactions(month: Month):
+def transactions(user: User, month: Month):
     with db() as conn:
-        return {"transactions": database.month_transactions(conn, month)}
+        return {"transactions": database.month_transactions(conn, user, month)}
 
 
 @app.get("/api/trend")
-def trend():
+def trend(user: User):
     with db() as conn:
-        by_month = database.category_by_month(conn)
+        by_month = database.category_by_month(conn, user)
 
     months = sorted(by_month)[-MAX_TREND_MONTHS:]
     totals = {}
@@ -106,17 +126,17 @@ def trend():
 
 
 @app.get("/api/accounts")
-def accounts():
+def accounts(user: User):
     with db() as conn:
-        return {"accounts": database.list_accounts(conn)}
+        return {"accounts": database.list_accounts(conn, user)}
 
 
 @app.get("/api/items")
-def items():
-    """Banks connected in the active environment (never exposes access tokens)."""
+def items(user: User):
+    """The user's connected banks in the active environment (never exposes access tokens)."""
     with db() as conn:
-        banks = database.list_items(conn)
-        counts = database.item_counts(conn)
+        banks = database.list_items(conn, user)
+        counts = database.item_counts(conn, user)
     return {
         "environment": database.active_environment(),
         "items": [
@@ -133,15 +153,15 @@ def items():
 
 
 @app.delete("/api/items/{item_id}")
-def remove_bank(item_id: str):
-    """Disconnect a bank at Plaid, then delete it and all its data here.
+def remove_bank(user: User, item_id: str):
+    """Disconnect one of the user's banks at Plaid, then delete it and all its data here.
 
     If Plaid can't be told, nothing is deleted, so the bank never ends up
     removed here while still connected (and billed) there.
     """
-    with scheduler.paused():
+    with scheduler.paused(user):
         with db() as conn:
-            bank = next((b for b in database.list_items(conn) if b["item_id"] == item_id), None)
+            bank = database.get_item(conn, user, item_id)
         if bank is None:
             raise HTTPException(status_code=404, detail="Unknown bank")
         try:
@@ -158,9 +178,9 @@ def remove_bank(item_id: str):
                 status_code=502,
                 detail="Could not reach Plaid, so nothing was deleted. Check your connection and try again.",
             )
-        with db() as conn, conn:
-            deleted = database.remove_item(conn, item_id)
-    return {"deleted": deleted}
+        with db() as conn:
+            deleted = database.remove_item(conn, user, item_id)
+    return {"deleted": deleted or 0}
 
 
 def call_plaid(path, body):
@@ -171,13 +191,13 @@ def call_plaid(path, body):
 
 
 @app.post("/api/plaid/link-token")
-def create_link_token():
-    """Start a Plaid Link session; the page hands the token to Plaid's Link widget."""
+def create_link_token(user: User):
+    """Start a Plaid Link session for this user; the page hands the token to Plaid's Link widget."""
     data = call_plaid("/link/token/create", {
         "client_name": "Spending Tracker",
         "language": "en",
         "country_codes": ["US"],
-        "user": {"client_user_id": "local-user"},
+        "user": {"client_user_id": user},
         "products": ["transactions"],
         # Fixed when the bank is first linked: ask for the most history Plaid allows.
         "transactions": {"days_requested": 730},
@@ -191,28 +211,28 @@ class PublicTokenExchange(BaseModel):
 
 
 @app.post("/api/plaid/exchange")
-def exchange_public_token(body: PublicTokenExchange):
+def exchange_public_token(user: User, body: PublicTokenExchange):
     """Trade Link's one-time public token for a permanent access token, save the
-    bank, and pull its first transactions."""
+    bank to this user, and pull its first transactions."""
     data = call_plaid("/item/public_token/exchange", {"public_token": body.public_token})
-    with db() as conn, conn:
+    with db() as conn:
         database.add_item(
-            conn, data["item_id"], data["access_token"],
+            conn, user, data["item_id"], data["access_token"],
             body.institution_name, database.active_environment(),
         )
     # Plaid can take a while to prepare a new bank's history. If this first sync
     # fails or another one is running, the scheduler retries and the status
     # reports it, so the bank is still saved either way.
     try:
-        scheduler.run_now()
+        scheduler.run_now(user)
     except Exception:
         pass
-    return {"item_id": data["item_id"], "status": scheduler.status()}
+    return {"item_id": data["item_id"], "status": scheduler.status(user)}
 
 
 @app.get("/api/sync")
-def sync_status():
-    return scheduler.status()
+def sync_status(user: User):
+    return scheduler.status(user)
 
 
 class IntervalUpdate(BaseModel):
@@ -220,33 +240,33 @@ class IntervalUpdate(BaseModel):
 
 
 @app.put("/api/sync/interval")
-def set_sync_interval(update: IntervalUpdate):
+def set_sync_interval(user: User, update: IntervalUpdate):
     if update.interval not in INTERVALS:
         raise HTTPException(status_code=422, detail=f"interval must be one of {list(INTERVALS)}")
-    scheduler.set_interval(update.interval)
-    return scheduler.status()
+    scheduler.set_interval(user, update.interval)
+    return scheduler.status(user)
 
 
 @app.post("/api/sync")
-def sync_now():
-    """Run a sync right now and wait for it. Failures are reported in the status."""
+def sync_now(user: User):
+    """Run the user's sync right now and wait for it. Failures are reported in the status."""
     try:
-        scheduler.run_now()
+        scheduler.run_now(user)
     except SyncBusy:
         raise HTTPException(status_code=409, detail="A sync is already running")
     except Exception:
         pass  # already recorded in sync_log; the status below carries the error
-    return scheduler.status()
+    return scheduler.status(user)
 
 
 @app.delete("/api/accounts/{account_id}")
-def remove_account(account_id: str):
-    """Permanently delete a card's purchases and stop tracking it."""
-    with db() as conn, conn:
-        deleted = database.remove_account(conn, account_id)
+def remove_account(user: User, account_id: str):
+    """Permanently delete one of the user's cards' purchases and stop tracking it."""
+    with db() as conn:
+        deleted = database.remove_account(conn, user, account_id)
         if deleted is None:
             raise HTTPException(status_code=404, detail="Unknown account")
-        return {"deleted": deleted, "accounts": database.list_accounts(conn)}
+        return {"deleted": deleted, "accounts": database.list_accounts(conn, user)}
 
 
 class AccountUpdate(BaseModel):
@@ -254,10 +274,10 @@ class AccountUpdate(BaseModel):
 
 
 @app.put("/api/accounts/{account_id}")
-def rename_account(account_id: str, update: AccountUpdate):
+def rename_account(user: User, account_id: str, update: AccountUpdate):
     """Set the display name; an empty or missing nickname resets to the default."""
     nickname = (update.nickname or "").strip() or None
-    with db() as conn, conn:
-        if not database.set_account_nickname(conn, account_id, nickname):
+    with db() as conn:
+        if not database.set_account_nickname(conn, user, account_id, nickname):
             raise HTTPException(status_code=404, detail="Unknown account")
-        return {"accounts": database.list_accounts(conn)}
+        return {"accounts": database.list_accounts(conn, user)}
