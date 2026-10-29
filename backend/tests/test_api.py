@@ -99,9 +99,3 @@ def test_sync_settings_are_per_user(client):
     as_user("bob")
     assert client.get("/api/sync").json()["interval"] == "1d"
 
-
-def test_without_sign_in_every_request_is_the_local_dev_user(client):
-    # Phase 1 placeholder; Phase 2 replaces current_user with real sign-in.
-    assert client.get("/api/items").status_code == 200
-    with database.connect() as conn:
-        assert database.list_user_ids(conn) == ["local-dev"]

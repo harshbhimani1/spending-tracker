@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import requests
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+import auth
 import database
 import plaid_client
 from scheduler import INTERVALS, Scheduler, SyncBusy
@@ -40,18 +41,21 @@ def db():
 _known_users = set()
 
 
-def current_user() -> str:
-    """Who is making this request. Every endpoint below is scoped to this user.
+def current_user(authorization: Annotated[Optional[str], Header()] = None) -> str:
+    """Who is making this request: the Supabase user whose session token it carries.
 
-    Placeholder until sign-in exists (Phase 2): every request is the single
-    local dev user from .env, so this must not be exposed beyond localhost.
+    Every endpoint that takes `user: User` is scoped to this id, and answers
+    401 when there's no valid session.
     """
-    user_id = os.getenv("LOCAL_USER_ID", "local-dev")
-    if user_id not in _known_users:
+    try:
+        signed_in = auth.verify_token(auth.bearer_token(authorization))
+    except auth.AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc), headers={"WWW-Authenticate": "Bearer"})
+    if (signed_in.user_id, signed_in.email) not in _known_users:
         with db() as conn:
-            database.ensure_user(conn, user_id)
-        _known_users.add(user_id)
-    return user_id
+            database.ensure_user(conn, signed_in.user_id, signed_in.email)
+        _known_users.add((signed_in.user_id, signed_in.email))
+    return signed_in.user_id
 
 
 User = Annotated[str, Depends(current_user)]
@@ -65,6 +69,16 @@ def previous_month(month):
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/config")
+def config():
+    """Public: tells the page which Supabase project to sign in with.
+    The publishable key is meant for browsers; no secret is exposed."""
+    return {
+        "supabase_url": auth.supabase_url(),
+        "supabase_publishable_key": os.getenv("SUPABASE_PUBLISHABLE_KEY", ""),
+    }
 
 
 @app.get("/api/months")

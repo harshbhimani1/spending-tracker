@@ -12,6 +12,10 @@ TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "postgresql://localhost/
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["PLAID_ENV"] = "sandbox"
 os.environ["LOCAL_USER_ID"] = "local-dev"
+# A fake Supabase project; tests sign their own tokens (see test_auth.py).
+os.environ["SUPABASE_URL"] = "https://test-project.supabase.co"
+os.environ["SUPABASE_PUBLISHABLE_KEY"] = "sb_publishable_test"
+os.environ["ALLOWED_EMAILS"] = ""
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest

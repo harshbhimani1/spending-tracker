@@ -52,6 +52,21 @@
   .tab[aria-current="page"] { background: var(--nav-active); color: var(--text); font-weight: 500; }
   .side-foot { margin-top: auto; padding: 0 10px; font-size: 12px; color: var(--muted); }
   .side-foot .side-bank { color: var(--text); font-weight: 500; }
+  .side-user { padding: 12px 10px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .side-user span { overflow-wrap: anywhere; }
+
+  /* Sign-in screen */
+  .signin { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+  .signin-card { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 28px 24px; }
+  .signin-card .brand { padding: 0; margin-bottom: 22px; }
+  .signin-card h1 { font-size: 18px; }
+  .signin-card p { color: var(--muted); margin: 6px 0 0; }
+  .signin-card label { display: block; color: var(--muted); font-size: 13px; margin: 20px 0 6px; }
+  .signin-card input { width: 100%; height: 40px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); }
+  .signin-card .btn { width: 100%; height: 40px; margin-top: 14px; }
+  .signin-msg { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .signin-msg.ok { color: var(--good); }
+  .signin-msg.error { color: var(--bad); }
   .badge { display: inline-block; margin-top: 8px; border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; font-size: 12px; color: var(--muted); }
 
   /* Main */
@@ -168,7 +183,19 @@
 </style>
 </head>
 <body>
-<div class="shell">
+<div class="signin" id="signin" hidden>
+  <form class="signin-card" id="signin-form">
+    <div class="brand"><span class="mark"></span>Spending Tracker</div>
+    <h1>Sign in</h1>
+    <p>We'll email you a sign-in link. Only invited family members can sign in.</p>
+    <label for="signin-email">Email</label>
+    <input id="signin-email" type="email" autocomplete="email" required>
+    <button class="btn primary" id="signin-button" type="submit">Email me a sign-in link</button>
+    <div class="signin-msg" id="signin-msg" role="status"></div>
+  </form>
+</div>
+
+<div class="shell" id="shell" hidden>
 
   <aside class="side">
     <div class="brand"><span class="mark"></span>Spending Tracker</div>
@@ -178,6 +205,10 @@
       <button class="tab" data-tab="trends">Trends</button>
     </nav>
     <div class="side-foot" id="side-foot"></div>
+    <div class="side-user">
+      <span id="user-email"></span>
+      <button class="btn small" id="sign-out">Sign out</button>
+    </div>
   </aside>
 
   <main class="main"><div class="main-inner">
@@ -268,6 +299,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script>
 const PALETTE = ["#8DB8D9", "#E8CFA0", "#9FD3B0", "#E39C7F", "#B9A6D9", "#7FC4C4", "#D9A3C3", "#C7CF8A",
                  "#8FA8E0", "#E6A8A8", "#6FB5A0", "#CBA77F"];
@@ -305,8 +337,96 @@ const accountLabel = (id) => (state.accounts.find((a) => a.account_id === id) ||
 const currentMonth = () => state.months[state.monthIndex];
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
+// ---- Signing in (Supabase) -------------------------------------------
+
+let sb = null;          // Supabase client, set up from /api/config
+let started = false;    // the dashboard has loaded for a signed-in user
+
+// Sign out with Supabase, and forget the session on this device even if
+// Supabase can't be reached (its library otherwise keeps the session).
+async function forgetSession() {
+  const { error } = await sb.auth.signOut();
+  if (error) localStorage.removeItem(sb.auth.storageKey);
+}
+
+// Every API call carries the signed-in user's session token. A 401 means the
+// session is gone (expired, signed out elsewhere, or not allowed), so go back
+// to the sign-in screen.
+async function api(url, options = {}) {
+  const { data } = await sb.auth.getSession();
+  const token = data.session ? data.session.access_token : null;
+  const headers = { ...(options.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    const body = await response.json().catch(() => ({}));
+    await forgetSession();
+    showSignIn(body.detail && body.detail.includes("allowed") ? body.detail : "Your session ended. Please sign in again.", "error");
+    throw new Error("Signed out");
+  }
+  return response;
+}
+
+function showSignIn(message = "", tone = "") {
+  $("#shell").hidden = true;
+  $("#signin").hidden = false;
+  $("#signin-msg").textContent = message;
+  $("#signin-msg").className = `signin-msg ${tone}`;
+}
+
+function startApp(session) {
+  if (started) return;
+  started = true;
+  $("#signin").hidden = true;
+  $("#shell").hidden = false;
+  $("#user-email").textContent = session.user.email || "";
+  init();
+}
+
+async function boot() {
+  try {
+    const config = await (await fetch("/api/config")).json();
+    if (typeof supabase === "undefined") throw new Error("The sign-in library could not be loaded. Check your connection and reload.");
+    sb = supabase.createClient(config.supabase_url, config.supabase_publishable_key);
+  } catch (error) {
+    showSignIn(error.message, "error");
+    return;
+  }
+  // getSession also picks up the session from a sign-in link the user just clicked.
+  const { data } = await sb.auth.getSession();
+  if (data.session) startApp(data.session); else showSignIn();
+  sb.auth.onAuthStateChange((event, session) => {
+    // A fresh sign-in after being signed out: reload for a clean slate.
+    if (event === "SIGNED_IN" && session && started && $("#shell").hidden) location.reload();
+    else if (event === "SIGNED_IN" && session) startApp(session);
+  });
+}
+
+$("#signin-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("#signin-button");
+  button.disabled = true;
+  showSignIn("Sending…");
+  const { error } = await sb.auth.signInWithOtp({
+    email: $("#signin-email").value.trim(),
+    // Never create an account from this page: only invited people can sign in.
+    options: { shouldCreateUser: false, emailRedirectTo: location.origin + location.pathname },
+  });
+  button.disabled = false;
+  if (error) {
+    const notInvited = /signup|not allowed|not found/i.test(error.message);
+    showSignIn(notInvited ? "That email hasn't been invited. Ask for an invite first." : error.message, "error");
+  } else {
+    showSignIn("Check your email for a sign-in link. You can close this tab.", "ok");
+  }
+});
+
+$("#sign-out").addEventListener("click", async () => {
+  await forgetSession();
+  location.reload();
+});
+
 async function getJson(url, options) {
-  const response = await fetch(url, options);
+  const response = await api(url, options);
   if (!response.ok) {
     // Prefer the server's explanation (e.g. Plaid's error text) over a bare status.
     const body = await response.json().catch(() => ({}));
@@ -362,7 +482,7 @@ async function loadData() {
 async function init() {
   try {
     await loadData();
-    const hashTab = location.hash.slice(1);
+    const hashTab = location.hash.slice(1);  // (a sign-in link's own #tokens never match a tab)
     if (state.months.length && TABS.includes(hashTab)) showTab(hashTab);
   } catch (error) {
     $("#empty").hidden = false;
@@ -489,7 +609,7 @@ async function syncNow() {
   state.syncing = true;
   renderSync();
   try {
-    const response = await fetch("/api/sync", { method: "POST" });
+    const response = await api("/api/sync", { method: "POST" });
     if (response.status === 409) return await refreshSync();
     if (!response.ok) throw new Error(`Sync request failed (${response.status})`);
     await applySync(await response.json());
@@ -932,7 +1052,7 @@ $("#accounts").addEventListener("keydown", async (event) => {
   }
 });
 
-init();
+boot();
 </script>
 </body>
 </html>
