@@ -116,6 +116,7 @@ def items():
     """Banks connected in the active environment (never exposes access tokens)."""
     with db() as conn:
         banks = database.list_items(conn)
+        counts = database.item_counts(conn)
     return {
         "environment": database.active_environment(),
         "items": [
@@ -123,10 +124,43 @@ def items():
                 "item_id": b["item_id"],
                 "institution_name": b["institution_name"],
                 "created_at": b["created_at"],
+                "cards": counts.get(b["item_id"], {}).get("cards", 0),
+                "purchases": counts.get(b["item_id"], {}).get("purchases", 0),
             }
             for b in banks
         ],
     }
+
+
+@app.delete("/api/items/{item_id}")
+def remove_bank(item_id: str):
+    """Disconnect a bank at Plaid, then delete it and all its data here.
+
+    If Plaid can't be told, nothing is deleted, so the bank never ends up
+    removed here while still connected (and billed) there.
+    """
+    with scheduler.paused():
+        with db() as conn:
+            bank = next((b for b in database.list_items(conn) if b["item_id"] == item_id), None)
+        if bank is None:
+            raise HTTPException(status_code=404, detail="Unknown bank")
+        try:
+            plaid_client.post("/item/remove", {"access_token": bank["access_token"]})
+        except plaid_client.PlaidError as exc:
+            # Already gone on Plaid's side (e.g. revoked at the bank): nothing to revoke.
+            if exc.code not in ("ITEM_NOT_FOUND", "INVALID_ACCESS_TOKEN"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Could not disconnect the bank at Plaid, so nothing was deleted. {exc}",
+                )
+        except requests.RequestException:
+            raise HTTPException(
+                status_code=502,
+                detail="Could not reach Plaid, so nothing was deleted. Check your connection and try again.",
+            )
+        with db() as conn, conn:
+            deleted = database.remove_item(conn, item_id)
+    return {"deleted": deleted}
 
 
 def call_plaid(path, body):

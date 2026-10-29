@@ -114,12 +114,19 @@ def connect():
 
 
 def import_legacy_token(conn):
-    """One-time move of the bank saved in plaid_token.json into the items table."""
-    if not LEGACY_TOKEN_FILE.exists() or conn.execute("SELECT 1 FROM items LIMIT 1").fetchone():
+    """One-time move of the bank saved in plaid_token.json into the items table.
+
+    Runs at most once per database (a settings flag records it), so removing
+    every bank later can't make the old token file bring one back.
+    """
+    if get_setting(conn, "legacy_token_checked"):
         return
-    data = json.loads(LEGACY_TOKEN_FILE.read_text())
-    # That file was only ever written by connect_bank.py, a sandbox-only script.
-    add_item(conn, data["item_id"], data["access_token"], None, "sandbox")
+    has_items = conn.execute("SELECT 1 FROM items LIMIT 1").fetchone()
+    if LEGACY_TOKEN_FILE.exists() and not has_items:
+        data = json.loads(LEGACY_TOKEN_FILE.read_text())
+        # That file was only ever written by connect_bank.py, a sandbox-only script.
+        add_item(conn, data["item_id"], data["access_token"], None, "sandbox")
+    set_setting(conn, "legacy_token_checked", "1")
     conn.commit()
 
 
@@ -143,6 +150,34 @@ def list_items(conn):
         (active_environment(),),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def item_counts(conn):
+    """{item_id: {"cards", "purchases"}} for the cards and purchases stored per bank."""
+    counts = {}
+    for row in conn.execute(
+        "SELECT a.item_id, COUNT(*) AS cards, "
+        "SUM((SELECT COUNT(*) FROM transactions t WHERE t.account_id = a.account_id)) AS purchases "
+        "FROM accounts a WHERE a.type = 'credit' AND a.ignored = 0 GROUP BY a.item_id"
+    ):
+        counts[row["item_id"]] = {"cards": row["cards"], "purchases": row["purchases"] or 0}
+    return counts
+
+
+def remove_item(conn, item_id):
+    """Delete a bank and everything stored for it: purchases, cards, sync position.
+
+    Revoking the connection at Plaid is the caller's job (and should come first).
+    Returns how many purchases were deleted.
+    """
+    accounts = [r["account_id"] for r in conn.execute("SELECT account_id FROM accounts WHERE item_id = ?", (item_id,))]
+    deleted = 0
+    for account_id in accounts:
+        deleted += conn.execute("DELETE FROM transactions WHERE account_id = ?", (account_id,)).rowcount
+    conn.execute("DELETE FROM accounts WHERE item_id = ?", (item_id,))
+    conn.execute("DELETE FROM sync_state WHERE item_id = ?", (item_id,))
+    conn.execute("DELETE FROM items WHERE item_id = ?", (item_id,))
+    return deleted
 
 
 def set_institution_name(conn, item_id, name):

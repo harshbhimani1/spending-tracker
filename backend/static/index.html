@@ -128,7 +128,10 @@
   /* Banks & cards */
   .bank { padding: 10px 0; border-top: 1px solid var(--line); }
   .bank:first-of-type { border-top: 0; padding-top: 0; }
+  .bank-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .bank-head .bank-name { flex: 1; min-width: 12em; }
   .bank-name { font-weight: 600; }
+  .bank-name .acct-sub { font-weight: 400; }
   .bank-name .meta { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
   .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0 8px 14px; }
   .acct-name { flex: 1; min-width: 12em; }
@@ -227,10 +230,6 @@
           <div class="cal-legend">Less<i style="background: #2C4A3A"></i><i style="background: #5F9A7A"></i><i style="background: #9FD3B0"></i>More</div>
         </div>
 
-        <div class="panel" style="margin-top: 16px;">
-          <h2>Banks &amp; cards</h2>
-          <div id="accounts"></div>
-        </div>
       </section>
 
       <section id="tab-transactions" hidden>
@@ -258,6 +257,12 @@
       </section>
 
     </div>
+
+    <!-- Lives outside the tabs so a bank with no purchases yet can still be managed (and removed). -->
+    <div class="panel" id="banks-panel" style="margin-top: 16px;">
+      <h2>Banks &amp; cards</h2>
+      <div id="accounts"></div>
+    </div>
   </div></main>
 </div>
 
@@ -272,7 +277,7 @@ const state = {
   overview: null, transactions: [],
   sync: null, syncing: false,
   items: [], environment: "",
-  tab: "overview", editing: null, removing: null,
+  tab: "overview", editing: null, removing: null, removingBank: null, disconnecting: false,
   filters: { search: "", category: "", account: "" },
   sort: { key: "date", dir: "desc" },
 };
@@ -319,6 +324,9 @@ function updateChrome() {
   const hasData = state.months.length > 0;
   $("#month-picker").hidden = !hasData || state.tab === "trends";
   $("#page-title").textContent = TITLES[state.tab];
+  // The banks list belongs to Overview, but is shown whenever there is no data
+  // to display, so a bank with nothing synced yet can still be removed.
+  $("#banks-panel").hidden = hasData ? state.tab !== "overview" : !state.items.length;
 }
 
 // Fetch everything, keeping the selected month if it still exists. Used on
@@ -343,6 +351,7 @@ async function loadData() {
   $("#empty").hidden = hasData;
   $("#app").hidden = !hasData;
   updateChrome();
+  renderAccounts();
   if (!hasData) return;
 
   const index = state.months.indexOf(keep);
@@ -645,11 +654,28 @@ function accountRow(a) {
     <button class="btn small danger" data-action="remove">Remove</button></div>`;
 }
 
+function bankHeader(item) {
+  const name = esc(item.institution_name || "Bank");
+  if (state.removingBank === item.item_id) {
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    const detail = state.disconnecting ? "Disconnecting…"
+      : `This disconnects it from Plaid and permanently deletes its ${plural(item.cards, "card")} and ${plural(item.purchases, "purchase")} here. To use it again you would have to reconnect it. It can't be undone.`;
+    const disabled = state.disconnecting ? " disabled" : "";
+    return `<div class="bank-head" data-bank="${esc(item.item_id)}">
+      <div class="bank-name">Remove ${name}?<div class="acct-sub">${detail}</div></div>
+      <button class="btn small danger-solid" data-bank-action="confirm"${disabled}>Disconnect bank</button>
+      <button class="btn small" data-bank-action="cancel"${disabled}>Cancel</button></div>`;
+  }
+  return `<div class="bank-head" data-bank="${esc(item.item_id)}">
+    <div class="bank-name">${name}<span class="meta">connected ${esc(localTime(item.created_at))}</span></div>
+    <button class="btn small danger" data-bank-action="remove">Remove bank</button></div>`;
+}
+
 function renderAccounts() {
   $("#accounts").innerHTML = state.items.map((item) => {
     const cards = state.accounts.filter((a) => a.item_id === item.item_id);
     return `<div class="bank">
-      <div class="bank-name">${esc(item.institution_name || "Bank")}<span class="meta">connected ${esc(localTime(item.created_at))}</span></div>
+      ${bankHeader(item)}
       ${cards.map(accountRow).join("") || `<p class="hint" style="padding-left: 14px;">No credit cards found at this bank yet.</p>`}
     </div>`;
   }).join("") || `<p class="hint">No banks connected yet.</p>`;
@@ -860,7 +886,32 @@ $("#table-head").addEventListener("click", (event) => {
   renderTable();
 });
 
+// Disconnecting a bank also revokes it at Plaid, so it can take a few seconds.
+async function removeBank(itemId) {
+  state.disconnecting = true;
+  renderAccounts();
+  try {
+    await getJson(`/api/items/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+    state.removingBank = null;
+    state.disconnecting = false;
+    await loadData();
+  } catch (error) {
+    state.disconnecting = false;
+    renderAccounts();
+    alert(error.message);
+  }
+}
+
 $("#accounts").addEventListener("click", async (event) => {
+  const bankButton = event.target.closest("[data-bank-action]");
+  if (bankButton) {
+    const itemId = bankButton.closest("[data-bank]").dataset.bank;
+    const action = bankButton.dataset.bankAction;
+    if (action === "remove") { state.removingBank = itemId; state.editing = null; state.removing = null; renderAccounts(); }
+    else if (action === "cancel") { state.removingBank = null; renderAccounts(); }
+    else if (action === "confirm") await removeBank(itemId);
+    return;
+  }
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const id = button.closest("[data-id]").dataset.id;

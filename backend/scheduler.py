@@ -1,6 +1,6 @@
 import logging
 import threading
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 
 import database
@@ -51,6 +51,13 @@ class Scheduler:
             return self._sync()
         finally:
             self._lock.release()
+
+    @contextmanager
+    def paused(self):
+        """Wait for any running sync to finish, then hold syncs off (scheduled
+        ones skip, Sync now reports busy) while the caller removes data."""
+        with self._lock:
+            yield
 
     def set_interval(self, interval):
         if interval not in INTERVALS:
