@@ -56,7 +56,7 @@
 
   /* Main */
   .main { flex: 999 1 560px; min-width: 0; padding: 24px 32px 56px; }
-  .main-inner { max-width: 1040px; }
+  .main-inner { width: 100%; }
   .top { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; justify-content: space-between; }
   .sub { color: var(--muted); margin-top: 2px; }
   .error { color: var(--bad); }
@@ -648,6 +648,7 @@ function renderAccounts() {
 
 function renderFilters() {
   const f = state.filters;
+  $("#search").value = f.search;
   const categories = [...new Set(state.transactions.map((t) => t.category))].sort();
   if (f.category && !categories.includes(f.category)) f.category = "";
   $("#category-filter").innerHTML = `<option value="">All categories</option>` +
@@ -805,7 +806,19 @@ $("#connect-bank").addEventListener("click", connectBank);
 $("#interval-select").addEventListener("change", (e) => changeInterval(e.target.value));
 $("#prev-month").addEventListener("click", () => stepMonth(-1));
 $("#next-month").addEventListener("click", () => stepMonth(1));
-document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+// Opening Transactions from the sidebar always starts clean. (Clicking a
+// category on Overview sets a filter on purpose and calls showTab directly.)
+function resetTransactionsView() {
+  state.filters = { search: "", category: "", account: "" };
+  state.sort = { key: "date", dir: "desc" };
+  renderFilters();
+  renderTable();
+}
+
+document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => {
+  if (b.dataset.tab === "transactions") resetTransactionsView();
+  showTab(b.dataset.tab);
+}));
 
 $("#category-list").addEventListener("click", (event) => {
   const row = event.target.closest("[data-category]");
