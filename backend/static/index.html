@@ -70,6 +70,8 @@
   .btn.primary { font-weight: 600; color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
   .btn.small { height: 32px; background: var(--line-soft); border: 0; }
   .btn.small.primary { background: var(--accent); }
+  .btn.small.danger { color: var(--bad); }
+  .btn.small.danger-solid { background: var(--bad); color: var(--on-accent); font-weight: 600; }
   .btn:disabled { opacity: 0.5; cursor: default; }
 
   .panel { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; min-width: 0; }
@@ -270,7 +272,7 @@ const state = {
   overview: null, transactions: [],
   sync: null, syncing: false,
   items: [], environment: "",
-  tab: "overview", editing: null,
+  tab: "overview", editing: null, removing: null,
   filters: { search: "", category: "", account: "" },
   sort: { key: "date", dir: "desc" },
 };
@@ -628,10 +630,19 @@ function accountRow(a) {
       <button class="btn small primary" data-action="save">Save</button>
       <button class="btn small" data-action="cancel">Cancel</button></div>`;
   }
+  if (state.removing === a.account_id) {
+    const n = a.purchases;
+    return `<div class="account-row" data-id="${esc(a.account_id)}">
+      <div class="acct-name">Remove ${esc(a.label)}?
+        <div class="acct-sub">This permanently deletes its ${n} purchase${n === 1 ? "" : "s"} and stops tracking the card. It can't be undone.</div></div>
+      <button class="btn small danger-solid" data-action="confirm-remove">Delete card</button>
+      <button class="btn small" data-action="cancel">Cancel</button></div>`;
+  }
   const sub = a.nickname ? `<div class="acct-sub">${esc(a.default_label)}</div>` : "";
   return `<div class="account-row" data-id="${esc(a.account_id)}">
     <div class="acct-name">${esc(a.label)}${sub}</div>
-    <button class="btn small" data-action="rename">Rename</button></div>`;
+    <button class="btn small" data-action="rename">Rename</button>
+    <button class="btn small danger" data-action="remove">Remove</button></div>`;
 }
 
 function renderAccounts() {
@@ -651,6 +662,7 @@ function renderFilters() {
   $("#search").value = f.search;
   const categories = [...new Set(state.transactions.map((t) => t.category))].sort();
   if (f.category && !categories.includes(f.category)) f.category = "";
+  if (f.account && !state.accounts.some((a) => a.account_id === f.account)) f.account = "";
   $("#category-filter").innerHTML = `<option value="">All categories</option>` +
     categories.map((c) => `<option value="${esc(c)}">${esc(prettyCategory(c))}</option>`).join("");
   $("#category-filter").value = f.category;
@@ -801,6 +813,13 @@ async function saveNickname(accountId) {
   renderAccounts(); renderFilters(); renderTable();
 }
 
+// Deleting a card changes every total, chart and list, so reload everything.
+async function removeCard(accountId) {
+  await getJson(`/api/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" });
+  state.removing = null;
+  await loadData();
+}
+
 $("#sync-now").addEventListener("click", syncNow);
 $("#connect-bank").addEventListener("click", connectBank);
 $("#interval-select").addEventListener("change", (e) => changeInterval(e.target.value));
@@ -846,9 +865,11 @@ $("#accounts").addEventListener("click", async (event) => {
   if (!button) return;
   const id = button.closest("[data-id]").dataset.id;
   try {
-    if (button.dataset.action === "rename") { state.editing = id; renderAccounts(); }
-    else if (button.dataset.action === "cancel") { state.editing = null; renderAccounts(); }
+    if (button.dataset.action === "rename") { state.editing = id; state.removing = null; renderAccounts(); }
+    else if (button.dataset.action === "remove") { state.removing = id; state.editing = null; renderAccounts(); }
+    else if (button.dataset.action === "cancel") { state.editing = null; state.removing = null; renderAccounts(); }
     else if (button.dataset.action === "save") await saveNickname(id);
+    else if (button.dataset.action === "confirm-remove") await removeCard(id);
   } catch (error) { alert(`Could not save: ${error.message}`); }
 });
 

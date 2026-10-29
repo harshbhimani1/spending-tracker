@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     type       TEXT NOT NULL,
     subtype    TEXT,
     mask       TEXT,
-    nickname   TEXT
+    nickname   TEXT,
+    ignored    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -90,10 +91,12 @@ def connect():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
-    # Databases created before nicknames existed don't have the column yet.
+    # Databases created before these columns existed don't have them yet.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)")}
     if "nickname" not in columns:
         conn.execute("ALTER TABLE accounts ADD COLUMN nickname TEXT")
+    if "ignored" not in columns:
+        conn.execute("ALTER TABLE accounts ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0")
     # Reads go through this view so sandbox test data never mixes into the
     # totals once a production key is in use (and vice versa). The environment
     # is validated to letters only, so inlining it is safe.
@@ -103,7 +106,7 @@ def connect():
         SELECT t.* FROM transactions t
         JOIN accounts a USING (account_id)
         JOIN items i USING (item_id)
-        WHERE i.environment = '{active_environment()}'
+        WHERE i.environment = '{active_environment()}' AND a.ignored = 0
         """
     )
     import_legacy_token(conn)
@@ -327,8 +330,10 @@ def account_label(account):
 
 def list_accounts(conn):
     rows = conn.execute(
-        "SELECT a.account_id, a.item_id, a.name, a.mask, a.nickname FROM accounts a "
-        "JOIN items i USING (item_id) WHERE a.type = 'credit' AND i.environment = ? "
+        "SELECT a.account_id, a.item_id, a.name, a.mask, a.nickname, "
+        "(SELECT COUNT(*) FROM transactions t WHERE t.account_id = a.account_id) AS purchases "
+        "FROM accounts a JOIN items i USING (item_id) "
+        "WHERE a.type = 'credit' AND a.ignored = 0 AND i.environment = ? "
         "ORDER BY a.name, a.mask",
         (active_environment(),),
     ).fetchall()
@@ -339,9 +344,31 @@ def list_accounts(conn):
             "label": account_label(r),
             "default_label": account_label({**dict(r), "nickname": None}),
             "nickname": r["nickname"],
+            "purchases": r["purchases"],
         }
         for r in rows
     ]
+
+
+def remove_account(conn, account_id):
+    """Permanently delete a card's stored purchases and stop tracking it.
+
+    The account row stays, marked ignored, so later syncs skip it instead of
+    bringing it back. Returns the number of purchases deleted, or None if
+    there is no such card.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM accounts WHERE account_id = ? AND ignored = 0", (account_id,)
+    ).fetchone()
+    if not exists:
+        return None
+    deleted = conn.execute("DELETE FROM transactions WHERE account_id = ?", (account_id,)).rowcount
+    conn.execute("UPDATE accounts SET ignored = 1 WHERE account_id = ?", (account_id,))
+    return deleted
+
+
+def ignored_account_ids(conn):
+    return {r["account_id"] for r in conn.execute("SELECT account_id FROM accounts WHERE ignored = 1")}
 
 
 def set_account_nickname(conn, account_id, nickname):

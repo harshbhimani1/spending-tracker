@@ -38,7 +38,6 @@ def sync_item(item):
     access = {"access_token": item["access_token"]}
 
     accounts = plaid_client.post("/accounts/get", access)["accounts"]
-    credit_ids = {a["account_id"] for a in accounts if a["type"] == "credit"}
 
     counts = {"added": 0, "modified": 0, "removed": 0}
 
@@ -46,6 +45,9 @@ def sync_item(item):
         with conn:
             database.upsert_accounts(conn, item_id, accounts)
         cursor = database.get_cursor(conn, item_id)
+        # Cards the user removed stay removed: their purchases are never stored again.
+        ignored = database.ignored_account_ids(conn)
+        credit_ids = {a["account_id"] for a in accounts if a["type"] == "credit" and a["account_id"] not in ignored}
 
         # Banks imported before names were stored get theirs filled in here.
         if not item["institution_name"]:

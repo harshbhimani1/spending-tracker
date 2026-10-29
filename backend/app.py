@@ -205,6 +205,16 @@ def sync_now():
     return scheduler.status()
 
 
+@app.delete("/api/accounts/{account_id}")
+def remove_account(account_id: str):
+    """Permanently delete a card's purchases and stop tracking it."""
+    with db() as conn, conn:
+        deleted = database.remove_account(conn, account_id)
+        if deleted is None:
+            raise HTTPException(status_code=404, detail="Unknown account")
+        return {"deleted": deleted, "accounts": database.list_accounts(conn)}
+
+
 class AccountUpdate(BaseModel):
     nickname: Optional[str] = Field(default=None, max_length=60)
 
