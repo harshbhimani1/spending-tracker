@@ -32,9 +32,12 @@ scheduler = Scheduler()
 async def lifespan(app):
     # Refuse to start without an encryption key, rather than store bank tokens in plain text.
     token_crypto.check_key()
-    database.init_schema()
-    with database.connect() as conn:
-        database.encrypt_plaintext_tokens(conn)
+    # On Vercel every new copy of the app would rerun this, so there the schema is
+    # set up once at deploy time instead (`python database.py`).
+    if not os.getenv("VERCEL"):
+        database.init_schema()
+        with database.connect() as conn:
+            database.encrypt_plaintext_tokens(conn)
     if background_thread_enabled():
         scheduler.start()
     yield

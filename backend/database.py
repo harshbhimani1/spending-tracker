@@ -122,8 +122,14 @@ CREATE TABLE IF NOT EXISTS sync_locks (
 
 
 def connect():
-    """Open a connection. Use as `with connect() as conn:`, which closes it afterwards."""
-    return psycopg.connect(database_url(), autocommit=True, row_factory=dict_row)
+    """Open a connection. Use as `with connect() as conn:`, which closes it afterwards.
+
+    prepare_threshold=None turns off server-side prepared statements, which a
+    transaction-mode connection pooler (Supabase's, used from Vercel) can't support.
+    """
+    return psycopg.connect(
+        database_url(), autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10
+    )
 
 
 def init_schema():
@@ -651,4 +657,5 @@ def spending_summary(conn, user_id):
 
 if __name__ == "__main__":
     init_schema()
-    print(f"Schema is up to date in {database_url()}")
+    # Deliberately not printing the URL: it contains the database password.
+    print("Schema is up to date.")
