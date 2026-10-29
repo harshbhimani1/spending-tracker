@@ -1,3 +1,6 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code: personal settings and temporary worktrees
+.claude/
