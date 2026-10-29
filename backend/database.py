@@ -392,6 +392,18 @@ def month_categories(conn, month):
     return [{"category": r["category"], "cents": r["cents"], "count": r["n"]} for r in rows]
 
 
+def month_daily(conn, month):
+    """Total spent and purchase count for each day of the month that had any."""
+    start, end = _month_range(month)
+    rows = conn.execute(
+        "SELECT date, SUM(amount_cents) AS cents, COUNT(*) AS n "
+        "FROM active_transactions WHERE date BETWEEN ? AND ? "
+        "GROUP BY date ORDER BY date",
+        (start, end),
+    ).fetchall()
+    return [{"date": r["date"], "cents": r["cents"], "count": r["n"]} for r in rows]
+
+
 def month_transactions(conn, month):
     start, end = _month_range(month)
     rows = conn.execute(

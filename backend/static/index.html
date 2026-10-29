@@ -4,34 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Spending Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #f6f4ff;
-    --card: #ffffff;
-    --text: #2d2a3e;
-    --muted: #756f8f;
-    --line: #ebe8f7;
-    --accent: #6c5ce7;
-    --accent-soft: #eeebff;
-    --on-accent: #ffffff;
-    --good: #00875f;
-    --bad: #d9363e;
-    --shadow: 0 6px 24px rgba(80, 60, 160, 0.08);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #16141f;
-      --card: #1f1c2d;
-      --text: #f1effa;
-      --muted: #a8a4c0;
-      --line: #322e48;
-      --accent: #8b7df0;
-      --accent-soft: #2c2754;
-      --on-accent: #14111f;
-      --good: #3ddc9f;
-      --bad: #ff7b80;
-      --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-    }
+    --bg: #12201A;
+    --side: #0F1A15;
+    --card: #1A2B23;
+    --field: #12201A;
+    --line: #2A3F34;
+    --line-soft: #22362C;
+    --text: #E8F0EA;
+    --muted: #A3B8AB;
+    --dim: #7E948A;
+    --accent: #9FD3B0;
+    --accent-dim: rgba(159, 211, 176, 0.45);
+    --on-accent: #12201A;
+    --nav-active: #1F3329;
+    --outline: #3B5446;
+    --bad: #F0907F;
+    --good: #9FD3B0;
+    color-scheme: dark;
   }
 
   * { box-sizing: border-box; }
@@ -39,170 +32,238 @@
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font: 16px/1.45 ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 14px/1.5 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
-  h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.02em; }
-  h2 { font-size: 1.05rem; margin: 0 0 14px; }
-  button, input, select { font: inherit; color: inherit; }
   [hidden] { display: none !important; }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 14px; }
 
-  header { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-  .month-picker { display: flex; align-items: center; gap: 6px; background: var(--card); border-radius: 999px; padding: 4px; box-shadow: var(--shadow); }
-  .month-picker span { min-width: 9.5em; text-align: center; font-weight: 600; }
-  .icon-btn { border: 0; background: var(--accent-soft); color: var(--accent); width: 36px; height: 36px; border-radius: 50%; font-size: 1.2rem; cursor: pointer; }
-  .icon-btn:disabled { opacity: 0.35; cursor: default; }
+  .shell { display: flex; flex-wrap: wrap; min-height: 100vh; }
 
-  .tabs { display: flex; gap: 8px; margin-bottom: 20px; overflow-x: auto; }
-  .tab { border: 0; background: var(--card); color: var(--muted); padding: 9px 20px; border-radius: 999px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); white-space: nowrap; }
-  .tab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+  /* Sidebar */
+  .side { flex: 1 1 232px; max-width: 232px; min-width: 200px; background: var(--side); border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 24px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; font-weight: 600; font-size: 15px; }
+  .mark { width: 18px; height: 18px; border-radius: 4px; background: var(--accent); display: inline-block; }
+  .nav { display: flex; flex-direction: column; gap: 2px; }
+  .tab { display: flex; align-items: center; min-height: 36px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--muted); text-align: left; cursor: pointer; }
+  .tab:hover { color: var(--text); }
+  .tab[aria-current="page"] { background: var(--nav-active); color: var(--text); font-weight: 500; }
+  .side-foot { margin-top: auto; padding: 0 10px; font-size: 12px; color: var(--muted); }
+  .side-foot .side-bank { color: var(--text); font-weight: 500; }
+  .badge { display: inline-block; margin-top: 8px; border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; font-size: 12px; color: var(--muted); }
 
-  .card { background: var(--card); border-radius: 22px; padding: 20px; box-shadow: var(--shadow); }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-bottom: 16px; }
-  .stat .label { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
-  .stat .value { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; margin-top: 4px; overflow-wrap: anywhere; }
-  .stat .note { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
-  .stat.hero { background: var(--accent); }
-  .stat.hero .label, .stat.hero .note, .stat.hero .value { color: var(--on-accent); }
-  .up { color: var(--bad); font-weight: 700; }
-  .down { color: var(--good); font-weight: 700; }
-
-  .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; }
-  @media (max-width: 760px) { .grid-2 { grid-template-columns: minmax(0, 1fr); } }
-  .chart-box { position: relative; height: 280px; }
-  .chart-box.tall { height: 380px; }
-
-  .cat-list { list-style: none; margin: 0; padding: 0; }
-  .cat-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 8px; border: 0; background: none; border-radius: 12px; cursor: pointer; text-align: left; }
-  .cat-row:hover { background: var(--accent-soft); }
-  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
-  .cat-row .name { flex: 1; font-weight: 600; }
-  .cat-row .pct { color: var(--muted); font-size: 0.85rem; }
-  .hint { color: var(--muted); font-size: 0.85rem; margin: 10px 0 0; }
-
-  .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
-  .account-row:first-of-type { border-top: 0; }
-  .account-row .acct-name { flex: 1; min-width: 12em; font-weight: 600; }
-  .account-row .acct-sub { color: var(--muted); font-size: 0.85rem; font-weight: 400; }
-  .account-row input { flex: 1; min-width: 12em; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); }
-  .btn { border: 0; border-radius: 999px; padding: 7px 16px; font-weight: 600; cursor: pointer; background: var(--accent-soft); color: var(--accent); }
-  .btn.primary { background: var(--accent); color: var(--on-accent); }
-
-  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
-  .toolbar input, .toolbar select { padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
-  .toolbar input { flex: 1; min-width: 12em; }
-  .table-wrap { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; min-width: 640px; }
-  th, td { text-align: left; padding: 11px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; user-select: none; }
-  th[aria-sort] { color: var(--accent); }
-  td.amount, th.amount { text-align: right; font-variant-numeric: tabular-nums; }
-  tfoot td { font-weight: 700; border-bottom: 0; }
-  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; background: var(--accent-soft); font-size: 0.85rem; font-weight: 600; }
-  .badge { margin-left: 6px; font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
-
-  .syncbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px 20px; margin-bottom: 20px; }
-  .sync-info { flex: 1; min-width: 14em; }
-  .sync-info strong { font-weight: 700; }
-  .sync-sub { color: var(--muted); font-size: 0.85rem; }
-  .sync-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-  .sync-controls label { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
-  .sync-controls select { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); margin-left: 6px; }
-  .btn:disabled { opacity: 0.6; cursor: default; }
-
-  .bank { padding: 6px 0 10px; border-top: 1px solid var(--line); }
-  .bank:first-child { border-top: 0; padding-top: 0; }
-  .bank-name { font-weight: 700; margin: 8px 0 2px; }
-  .bank-name .sub { color: var(--muted); font-size: 0.8rem; font-weight: 400; margin-left: 8px; }
-  .bank .account-row { border-top: 0; padding: 6px 0 6px 12px; }
-  .badge.env { margin-left: 10px; vertical-align: middle; }
-
-  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+  /* Main */
+  .main { flex: 999 1 560px; min-width: 0; padding: 24px 32px 56px; }
+  .main-inner { max-width: 1040px; }
+  .top { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; justify-content: space-between; }
+  .sub { color: var(--muted); margin-top: 2px; }
   .error { color: var(--bad); }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .month-picker { display: flex; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
+  .month-picker span { padding: 0 8px; font-weight: 500; min-width: 9em; text-align: center; }
+  .month-picker button { border: 0; background: none; width: 44px; height: 36px; cursor: pointer; font-size: 18px; }
+  .month-picker button:disabled { color: #5F7568; cursor: default; }
+  .field { background: var(--card); border: 1px solid var(--line); border-radius: 6px; height: 36px; padding: 0 10px; }
+  .btn { font-weight: 500; background: transparent; border: 1px solid var(--outline); border-radius: 6px; height: 36px; padding: 0 14px; cursor: pointer; }
+  .btn.primary { font-weight: 600; color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+  .btn.small { height: 32px; background: var(--line-soft); border: 0; }
+  .btn.small.primary { background: var(--accent); }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; min-width: 0; }
+  .panel > h2:first-child { margin-top: 0; }
+  .stack > * + * { margin-top: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 16px; }
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; margin-top: 24px; }
+
+  /* Stat strip */
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 24px; }
+  .strip > div { background: var(--card); padding: 16px 20px; min-width: 0; }
+  .strip .label { color: var(--muted); font-size: 13px; }
+  .strip .value { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .strip .note { color: var(--muted); font-size: 13px; }
+  .up { color: var(--bad); }
+  .down { color: var(--good); }
+
+  /* Category ring */
+  .ring-wrap { display: flex; flex-wrap: wrap; gap: 24px 32px; align-items: center; }
+  .ring { position: relative; width: 240px; height: 240px; flex: none; }
+  .ring svg { display: block; }
+  .ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; padding: 0 44px; }
+  .ring-center .small { color: var(--muted); font-size: 12px; }
+  .ring-center .big { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .cat-list { list-style: none; margin: 0; padding: 0; flex: 1 1 240px; min-width: 0; }
+  .cat-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 0; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; cursor: pointer; }
+  .cat-list li:last-child .cat-row { border-bottom: 0; }
+  .cat-row:hover .name { color: var(--accent); }
+  .cat-row .name { flex: 1; min-width: 0; }
+  .cat-row .amt { font-variant-numeric: tabular-nums; }
+  .cat-row .pct { width: 34px; text-align: right; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+  .chart-box { position: relative; height: 260px; }
+  .chart-box.tall { height: 380px; }
+  .panel.fill { display: flex; flex-direction: column; }
+  .chart-box.grow { flex: 1; height: auto; min-height: 260px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+
+  /* Spending calendar */
+  .cal-head-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 16px; margin-bottom: 14px; }
+  .cal-head-row h2 { margin: 0; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+  .cal-weekday { text-align: center; font-size: 11px; color: var(--muted); }
+  .cal-cell { min-height: 64px; border-radius: 6px; padding: 6px 8px; font-size: 12px; color: var(--muted); background: var(--field); border: 1px solid var(--line-soft); }
+  .cal-cell.future { color: var(--dim); background: transparent; }
+  .cal-cell.today { border-color: var(--accent); color: var(--text); }
+  .cal-cell.lvl1 { background: #2C4A3A; border-color: #2C4A3A; color: var(--text); }
+  .cal-cell.lvl2 { background: #5F9A7A; border-color: #5F9A7A; color: #0A140F; }
+  .cal-cell.lvl3 { background: #9FD3B0; border-color: #9FD3B0; color: #0E1A14; }
+  .cal-amt { display: block; margin-top: 6px; font-weight: 600; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .cal-legend { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; color: var(--muted); }
+  .cal-legend i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+
+  /* Banks & cards */
+  .bank { padding: 10px 0; border-top: 1px solid var(--line); }
+  .bank:first-of-type { border-top: 0; padding-top: 0; }
+  .bank-name { font-weight: 600; }
+  .bank-name .meta { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+  .account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0 8px 14px; }
+  .acct-name { flex: 1; min-width: 12em; }
+  .acct-sub { color: var(--muted); font-size: 12px; }
+  .account-row input { flex: 1; min-width: 12em; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); }
+
+  /* Transactions */
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .toolbar .field { background: var(--field); }
+  .toolbar input { flex: 1 1 220px; min-width: 0; }
+  .table-wrap { overflow-x: auto; margin: 0 -20px; }
+  table { width: 100%; border-collapse: collapse; min-width: 640px; }
+  th, td { text-align: left; padding: 12px 20px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+  thead th { color: var(--muted); font-size: 12px; font-weight: 500; border-bottom-color: var(--line); cursor: pointer; user-select: none; }
+  thead th[aria-sort] { color: var(--text); font-weight: 600; }
+  td.date, td.card { color: var(--muted); }
+  td.merchant { font-weight: 500; }
+  td.amount, th.amount { text-align: right; font-variant-numeric: tabular-nums; }
+  tfoot td { font-weight: 600; border-bottom: 0; }
+  tfoot td.amount { color: var(--accent); }
+  .chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 8px; font-size: 12px; }
+  .pending { margin-left: 8px; font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--line-soft); color: var(--accent); font-weight: 600; }
+  td.none { text-align: center; color: var(--muted); padding: 40px 0; }
+
+  @media (max-width: 760px) {
+    .side { flex: 1 1 100%; max-width: none; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 16px; border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 16px; }
+    .nav { flex-direction: row; overflow-x: auto; }
+    .side-foot { display: none; }
+    .main { padding: 20px 16px 48px; }
+    .cal-grid { gap: 4px; }
+    .cal-cell { min-height: 52px; padding: 4px 5px; }
+    .cal-amt { font-size: 11px; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>Spending Tracker<span class="badge env" id="env-badge" hidden>Sandbox · test data</span></h1>
-    <div class="month-picker" id="month-picker" hidden>
-      <button class="icon-btn" id="prev-month" aria-label="Previous month">‹</button>
-      <span id="month-label"></span>
-      <button class="icon-btn" id="next-month" aria-label="Next month">›</button>
-    </div>
-  </header>
+<div class="shell">
 
-  <div class="card syncbar" id="syncbar" hidden>
-    <div class="sync-info">
-      <div id="sync-text"></div>
-      <div class="sync-sub" id="sync-sub"></div>
-    </div>
-    <div class="sync-controls">
-      <label>Auto-refresh<select id="interval-select"></select></label>
-      <button class="btn" id="connect-bank">Connect a bank</button>
-      <button class="btn primary" id="sync-now">Sync now</button>
-    </div>
-  </div>
-
-  <div id="empty" class="card empty" hidden></div>
-
-  <div id="app" hidden>
-    <nav class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="overview" aria-selected="true">Overview</button>
-      <button class="tab" role="tab" data-tab="transactions" aria-selected="false">Transactions</button>
-      <button class="tab" role="tab" data-tab="trends" aria-selected="false">Trends</button>
+  <aside class="side">
+    <div class="brand"><span class="mark"></span>Spending Tracker</div>
+    <nav class="nav" aria-label="Sections">
+      <button class="tab" data-tab="overview" aria-current="page">Overview</button>
+      <button class="tab" data-tab="transactions">Transactions</button>
+      <button class="tab" data-tab="trends">Trends</button>
     </nav>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
 
-    <section id="tab-overview">
-      <div class="cards" id="cards"></div>
-      <div class="grid-2">
-        <div class="card">
-          <h2>Spending by category</h2>
-          <div class="chart-box"><canvas id="category-chart"></canvas></div>
-        </div>
-        <div class="card">
-          <h2>Categories</h2>
-          <ul class="cat-list" id="category-list"></ul>
-          <p class="hint">Click a category to see its transactions.</p>
-        </div>
-      </div>
-      <div class="card">
-        <h2>Banks &amp; cards</h2>
-        <div id="accounts"></div>
-      </div>
-    </section>
+  <main class="main"><div class="main-inner">
 
-    <section id="tab-transactions" hidden>
-      <div class="card">
-        <div class="toolbar">
-          <input id="search" type="search" placeholder="Search merchant…" aria-label="Search merchant">
-          <select id="category-filter" aria-label="Filter by category"></select>
-          <select id="account-filter" aria-label="Filter by card"></select>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr id="table-head"></tr></thead>
-            <tbody id="table-body"></tbody>
-            <tfoot id="table-foot"></tfoot>
-          </table>
-        </div>
+    <header class="top">
+      <div>
+        <h1 id="page-title">Overview</h1>
+        <div class="sub" id="sync-line"></div>
       </div>
-    </section>
+      <div class="controls">
+        <div class="month-picker" id="month-picker" hidden>
+          <button id="prev-month" aria-label="Previous month">&#8249;</button>
+          <span id="month-label"></span>
+          <button id="next-month" aria-label="Next month">&#8250;</button>
+        </div>
+        <select class="field" id="interval-select" aria-label="Auto-refresh"></select>
+        <button class="btn" id="connect-bank">Connect a bank</button>
+        <button class="btn primary" id="sync-now">Sync now</button>
+      </div>
+    </header>
 
-    <section id="tab-trends" hidden>
-      <div class="card">
-        <h2>Monthly spending by category</h2>
-        <div class="chart-box tall"><canvas id="trend-chart"></canvas></div>
-      </div>
-    </section>
-  </div>
-</main>
+    <div id="empty" class="panel empty" hidden></div>
+
+    <div id="app" hidden>
+
+      <section id="tab-overview">
+        <div class="strip" id="cards"></div>
+
+        <div class="row" style="margin-top: 16px;">
+          <div class="panel" style="flex: 3 1 520px;">
+            <h2>Spending by category</h2>
+            <div class="ring-wrap">
+              <div class="ring" id="ring"></div>
+              <ul class="cat-list" id="category-list"></ul>
+            </div>
+            <p class="hint">Click a category to see its transactions.</p>
+          </div>
+          <div class="panel fill" style="flex: 2 1 340px;">
+            <h2>Monthly spending</h2>
+            <div class="chart-box grow"><canvas id="monthly-chart"></canvas></div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top: 16px;">
+          <div class="cal-head-row">
+            <h2>Spending calendar</h2>
+            <span class="sub" id="calendar-title"></span>
+          </div>
+          <div class="cal-grid" id="calendar" role="img" aria-label="Spending calendar"></div>
+          <div class="cal-legend">Less<i style="background: #2C4A3A"></i><i style="background: #5F9A7A"></i><i style="background: #9FD3B0"></i>More</div>
+        </div>
+
+        <div class="panel" style="margin-top: 16px;">
+          <h2>Banks &amp; cards</h2>
+          <div id="accounts"></div>
+        </div>
+      </section>
+
+      <section id="tab-transactions" hidden>
+        <div class="panel" style="margin-top: 24px;">
+          <div class="toolbar">
+            <input class="field" id="search" type="search" placeholder="Search merchant" aria-label="Search merchant">
+            <select class="field" id="category-filter" aria-label="Filter by category"></select>
+            <select class="field" id="account-filter" aria-label="Filter by card"></select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr id="table-head"></tr></thead>
+              <tbody id="table-body"></tbody>
+              <tfoot id="table-foot"></tfoot>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-trends" hidden>
+        <div class="panel" style="margin-top: 24px;">
+          <h2>Monthly spending by category</h2>
+          <div class="chart-box tall"><canvas id="trend-chart"></canvas></div>
+        </div>
+      </section>
+
+    </div>
+  </div></main>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
 <script>
-const PALETTE = ["#6c5ce7", "#00b894", "#ff7675", "#fdcb6e", "#0984e3", "#e84393",
-                 "#00cec9", "#e17055", "#a29bfe", "#55efc4", "#74b9fd", "#fab1a0"];
+const PALETTE = ["#8DB8D9", "#E8CFA0", "#9FD3B0", "#E39C7F", "#B9A6D9", "#7FC4C4", "#D9A3C3", "#C7CF8A",
+                 "#8FA8E0", "#E6A8A8", "#6FB5A0", "#CBA77F"];
 
 const state = {
   months: [], monthIndex: 0, accounts: [], trend: null,
@@ -214,11 +275,13 @@ const state = {
   sort: { key: "date", dir: "desc" },
 };
 const TABS = ["overview", "transactions", "trends"];
+const TITLES = { overview: "Overview", transactions: "Transactions", trends: "Trends" };
 const colors = {};
 const charts = {};
 
 const $ = (selector) => document.querySelector(selector);
 const money = (cents) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const moneyWhole = (cents) => `$${Math.round(cents / 100).toLocaleString("en-US")}`;
 const esc = (text) => String(text).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const prettyCategory = (raw) => raw.toLowerCase().replace(/_and_/g, " & ").replace(/_/g, " ")
@@ -250,6 +313,12 @@ async function getJson(url, options) {
 const EMPTY_NO_BANK = `No bank connected yet. Click <strong>Connect a bank</strong> to get started.`;
 const EMPTY_NO_DATA = `No transactions yet. Click <strong>Sync now</strong> to pull them in from your bank.`;
 
+function updateChrome() {
+  const hasData = state.months.length > 0;
+  $("#month-picker").hidden = !hasData || state.tab === "trends";
+  $("#page-title").textContent = TITLES[state.tab];
+}
+
 // Fetch everything, keeping the selected month if it still exists. Used on
 // first load and again whenever a sync or a new bank brings in new data.
 async function loadData() {
@@ -264,14 +333,14 @@ async function loadData() {
   state.environment = items.environment;
   trend.categories.forEach(colorFor);
 
-  $("#env-badge").hidden = state.environment !== "sandbox";
+  renderSideFoot();
   renderSync();
 
   const hasData = state.months.length > 0;
   $("#empty").innerHTML = state.items.length ? EMPTY_NO_DATA : EMPTY_NO_BANK;
   $("#empty").hidden = hasData;
-  $("#month-picker").hidden = !hasData;
   $("#app").hidden = !hasData;
+  updateChrome();
   if (!hasData) return;
 
   const index = state.months.indexOf(keep);
@@ -280,7 +349,6 @@ async function loadData() {
 }
 
 async function init() {
-  $("#syncbar").hidden = false;
   try {
     await loadData();
     const hashTab = location.hash.slice(1);
@@ -296,7 +364,7 @@ async function init() {
 
 // ---- Sync status -----------------------------------------------------
 
-const INTERVAL_LABELS = { "1h": "Every hour", "1d": "Every day", "1w": "Every week", "off": "Off" };
+const INTERVAL_LABELS = { "1h": "Refresh every hour", "1d": "Refresh every day", "1w": "Refresh every week", "off": "Refresh off" };
 
 function relativeTime(iso) {
   const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
@@ -313,21 +381,25 @@ function relativeTime(iso) {
 const localTime = (iso) => new Date(iso).toLocaleString("en-US",
   { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
+function renderSideFoot() {
+  const banks = state.items.map((i) => `<div class="side-bank">${esc(i.institution_name || "Bank")}</div>`).join("");
+  $("#side-foot").innerHTML = banks + (state.environment === "sandbox" ? `<div class="badge">Sandbox · test data</div>` : "");
+}
+
 function renderSync() {
   const s = state.sync;
   if (!s) return;
   const failed = s.last_attempt && s.last_attempt.status === "error";
 
-  $("#sync-text").innerHTML = s.last_success_at
-    ? `Last updated <strong title="${esc(localTime(s.last_success_at))}">${relativeTime(s.last_success_at)}</strong>`
-    : `<strong>Not synced yet</strong>`;
-
-  let sub = s.interval === "off" ? "Auto-refresh is off"
-    : s.next_run_at ? `Next sync ${relativeTime(s.next_run_at)}` : "First sync starting soon";
-  if (s.running) sub = "Syncing now…";
-  $("#sync-sub").innerHTML = failed && !s.running
-    ? `<span class="error">Last attempt failed (${esc(relativeTime(s.last_attempt.finished_at))}): ${esc(s.last_attempt.error || "unknown error")}</span>`
-    : esc(sub);
+  const updated = s.last_success_at
+    ? `Last updated <span title="${esc(localTime(s.last_success_at))}">${relativeTime(s.last_success_at)}</span>`
+    : "Not synced yet";
+  let next = s.interval === "off" ? "auto-refresh is off"
+    : s.next_run_at ? `next sync ${relativeTime(s.next_run_at)}` : "first sync starting soon";
+  if (s.running) next = "syncing now…";
+  $("#sync-line").innerHTML = `${updated} · ${esc(next)}` + (failed && !s.running
+    ? `<div class="error">Last attempt failed (${esc(relativeTime(s.last_attempt.finished_at))}): ${esc(s.last_attempt.error || "unknown error")}</div>`
+    : "");
 
   const select = $("#interval-select");
   select.innerHTML = s.intervals.map((i) => `<option value="${i}">${INTERVAL_LABELS[i] || i}</option>`).join("");
@@ -446,7 +518,8 @@ async function loadMonth() {
 
 function renderAll() {
   renderCards();
-  renderCategoryList();
+  renderCategories();
+  renderCalendar();
   renderAccounts();
   renderFilters();
   renderTable();
@@ -455,37 +528,96 @@ function renderAll() {
 
 function renderCards() {
   const o = state.overview;
-  let change = `<span class="note">No spending recorded last month</span>`;
+  const cardCount = new Set(state.transactions.map((t) => t.account_id)).size;
+  let change = `<div class="value">–</div><div class="note">No spending recorded last month</div>`;
   if (o.previous_total_cents > 0) {
     const pct = ((o.total_cents - o.previous_total_cents) / o.previous_total_cents) * 100;
     const direction = pct > 0 ? "up" : pct < 0 ? "down" : "";
-    const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "•";
-    change = `<span class="${direction}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>
+    const arrow = pct > 0 ? "▲ " : pct < 0 ? "▼ " : "";
+    change = `<div class="value ${direction}">${arrow}${Math.abs(pct).toFixed(1)}%</div>
               <div class="note">${money(o.previous_total_cents)} last month</div>`;
   }
   const top = o.top_merchant
     ? `<div class="value">${esc(o.top_merchant.merchant)}</div><div class="note">${money(o.top_merchant.cents)}</div>`
     : `<div class="value">–</div>`;
   $("#cards").innerHTML = `
-    <div class="card stat hero"><div class="label">Total spent</div>
-      <div class="value">${money(o.total_cents)}</div>
-      <div class="note">${o.count} purchase${o.count === 1 ? "" : "s"}</div></div>
-    <div class="card stat"><div class="label">Vs last month</div>
-      <div class="value">${change}</div></div>
-    <div class="card stat"><div class="label">Daily average</div>
-      <div class="value">${money(o.daily_average_cents)}</div></div>
-    <div class="card stat"><div class="label">Top merchant</div>${top}</div>`;
+    <div><div class="label">Purchases</div><div class="value">${o.count}</div>
+      <div class="note">${money(o.total_cents)} on ${cardCount} card${cardCount === 1 ? "" : "s"}</div></div>
+    <div><div class="label">Vs last month</div>${change}</div>
+    <div><div class="label">Daily average</div><div class="value">${money(o.daily_average_cents)}</div>
+      <div class="note">${monthName(currentMonth(), "long").split(" ")[0]} so far</div></div>
+    <div><div class="label">Top merchant</div>${top}</div>`;
 }
 
-function renderCategoryList() {
+// Ring chart: one arc per category, drawn as dashed circle strokes with a
+// small gap between arcs so neighbours stay distinct.
+function renderRing(categories, total) {
+  const C = 2 * Math.PI * 140, GAP = 8;
+  let offset = 0;
+  const arcs = total > 0 ? categories.map((c) => {
+    const length = (c.cents / total) * C;
+    const dash = Math.max(length - GAP, Math.min(length, 1.5));
+    const arc = `<circle cx="170" cy="170" r="140" stroke="${colorFor(c.category)}"
+      stroke-dasharray="${dash.toFixed(2)} ${(C - dash).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}">
+      <title>${esc(prettyCategory(c.category))}: ${money(c.cents)}</title></circle>`;
+    offset += length;
+    return arc;
+  }).join("") : "";
+  $("#ring").innerHTML = `
+    <svg viewBox="0 0 340 340" width="240" height="240" role="img" aria-label="Ring chart of spending by category">
+      <g transform="rotate(-90 170 170)" fill="none" stroke-width="26">
+        <circle cx="170" cy="170" r="140" stroke="${cssVar("--line-soft")}"/>${arcs}
+      </g>
+    </svg>
+    <div class="ring-center">
+      <div class="small">${esc(monthName(currentMonth(), "long").split(" ")[0])}</div>
+      <div class="big">${money(total)}</div>
+      <div class="small">total spent</div>
+    </div>`;
+}
+
+function renderCategories() {
   const o = state.overview;
+  renderRing(o.categories, o.total_cents);
   $("#category-list").innerHTML = o.categories.map((c) => `
     <li><button class="cat-row" data-category="${esc(c.category)}">
       <span class="dot" style="background:${colorFor(c.category)}"></span>
       <span class="name">${esc(prettyCategory(c.category))}</span>
+      <span class="amt">${money(c.cents)}</span>
       <span class="pct">${((c.cents / o.total_cents) * 100).toFixed(0)}%</span>
-      <strong>${money(c.cents)}</strong>
     </button></li>`).join("");
+}
+
+// Spending calendar: a month grid where each day with purchases is shaded
+// by how much was spent relative to that month's biggest day.
+function renderCalendar() {
+  const month = currentMonth();
+  const [year, number] = month.split("-").map(Number);
+  const daysInMonth = new Date(year, number, 0).getDate();
+  const leading = new Date(year, number - 1, 1).getDay();
+  const byDay = {};
+  state.overview.daily.forEach((d) => { byDay[Number(d.date.slice(8))] = d; });
+  const max = Math.max(0, ...state.overview.daily.map((d) => d.cents));
+  const today = new Date();
+  const isCurrent = today.getFullYear() === year && today.getMonth() + 1 === number;
+
+  const cells = ["S", "M", "T", "W", "T", "F", "S"].map((w) => `<div class="cal-weekday" aria-hidden="true">${w}</div>`);
+  for (let i = 0; i < leading; i++) cells.push("<div></div>");
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = byDay[day];
+    const ratio = d && max ? d.cents / max : 0;
+    const level = !d ? 0 : ratio <= 0.25 ? 1 : ratio <= 0.6 ? 2 : 3;
+    const classes = ["cal-cell"];
+    if (level) classes.push(`lvl${level}`);
+    if (isCurrent && day > today.getDate()) classes.push("future");
+    if (isCurrent && day === today.getDate()) classes.push("today");
+    const label = new Date(year, number - 1, day).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const title = d ? ` title="${esc(`${label} · ${money(d.cents)} · ${d.count} purchase${d.count === 1 ? "" : "s"}`)}"` : "";
+    cells.push(`<div class="${classes.join(" ")}"${title}>${day}${d ? `<span class="cal-amt">${moneyWhole(d.cents)}</span>` : ""}</div>`);
+  }
+  $("#calendar").innerHTML = cells.join("");
+  $("#calendar").setAttribute("aria-label", `Spending calendar for ${monthName(month)}`);
+  $("#calendar-title").textContent = monthName(month);
 }
 
 function accountRow(a) {
@@ -493,21 +625,21 @@ function accountRow(a) {
     return `<div class="account-row" data-id="${esc(a.account_id)}">
       <input id="nickname-input" maxlength="60" value="${esc(a.nickname || "")}"
              placeholder="${esc(a.default_label)}" aria-label="Card name">
-      <button class="btn primary" data-action="save">Save</button>
-      <button class="btn" data-action="cancel">Cancel</button></div>`;
+      <button class="btn small primary" data-action="save">Save</button>
+      <button class="btn small" data-action="cancel">Cancel</button></div>`;
   }
   const sub = a.nickname ? `<div class="acct-sub">${esc(a.default_label)}</div>` : "";
   return `<div class="account-row" data-id="${esc(a.account_id)}">
     <div class="acct-name">${esc(a.label)}${sub}</div>
-    <button class="btn" data-action="rename">Rename</button></div>`;
+    <button class="btn small" data-action="rename">Rename</button></div>`;
 }
 
 function renderAccounts() {
   $("#accounts").innerHTML = state.items.map((item) => {
     const cards = state.accounts.filter((a) => a.item_id === item.item_id);
     return `<div class="bank">
-      <div class="bank-name">${esc(item.institution_name || "Bank")}<span class="sub">connected ${esc(localTime(item.created_at))}</span></div>
-      ${cards.map(accountRow).join("") || `<p class="hint">No credit cards found at this bank yet.</p>`}
+      <div class="bank-name">${esc(item.institution_name || "Bank")}<span class="meta">connected ${esc(localTime(item.created_at))}</span></div>
+      ${cards.map(accountRow).join("") || `<p class="hint" style="padding-left: 14px;">No credit cards found at this bank yet.</p>`}
     </div>`;
   }).join("") || `<p class="hint">No banks connected yet.</p>`;
   const input = $("#nickname-input");
@@ -556,17 +688,17 @@ function renderTable() {
 
   $("#table-head").innerHTML = COLUMNS.map((c) => {
     const sorted = state.sort.key === c.key;
-    const arrow = sorted ? (state.sort.dir === "asc" ? " ▲" : " ▼") : "";
+    const arrow = sorted ? (state.sort.dir === "asc" ? " ▴" : " ▾") : "";
     return `<th class="${c.cls || ""}" data-sort="${c.key}"${sorted ? ` aria-sort="${state.sort.dir === "asc" ? "ascending" : "descending"}"` : ""}>${c.label}${arrow}</th>`;
   }).join("");
 
   $("#table-body").innerHTML = rows.map((t) => `
-    <tr><td>${esc(t.date)}</td>
-      <td>${esc(t.merchant)}${t.pending ? `<span class="badge">Pending</span>` : ""}</td>
-      <td><span class="chip"><span class="dot" style="background:${colorFor(t.category)}"></span>${esc(prettyCategory(t.category))}</span></td>
-      <td>${esc(accountLabel(t.account_id))}</td>
+    <tr><td class="date">${esc(t.date)}</td>
+      <td class="merchant">${esc(t.merchant)}${t.pending ? `<span class="pending">Pending</span>` : ""}</td>
+      <td><span class="chip"><span class="dot" style="background:${colorFor(t.category)}; width: 8px; height: 8px;"></span>${esc(prettyCategory(t.category))}</span></td>
+      <td class="card">${esc(accountLabel(t.account_id))}</td>
       <td class="amount">${money(t.amount_cents)}</td></tr>`).join("")
-    || `<tr><td colspan="5" class="empty">No transactions match.</td></tr>`;
+    || `<tr><td colspan="5" class="none">No transactions match.</td></tr>`;
 
   const total = rows.reduce((sum, t) => sum + t.amount_cents, 0);
   $("#table-foot").innerHTML = rows.length
@@ -582,27 +714,32 @@ function renderCharts() {
   }
   Chart.defaults.color = cssVar("--muted");
   Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
-  if (state.tab === "overview") renderCategoryChart();
+  if (state.tab === "overview") renderMonthlyChart();
   if (state.tab === "trends") renderTrendChart();
 }
 
-function renderCategoryChart() {
-  const categories = state.overview.categories;
-  charts.category?.destroy();
-  charts.category = new Chart($("#category-chart"), {
-    type: "doughnut",
+const dollarTick = (v) => `$${(v / 100).toLocaleString("en-US")}`;
+
+function renderMonthlyChart() {
+  const trend = state.trend, current = currentMonth();
+  const totals = trend.months.map((_, i) => trend.categories.reduce((sum, c) => sum + trend.series[c][i], 0));
+  charts.monthly?.destroy();
+  charts.monthly = new Chart($("#monthly-chart"), {
+    type: "bar",
     data: {
-      labels: categories.map((c) => prettyCategory(c.category)),
+      labels: trend.months.map((m) => monthName(m, "short").split(" ")[0]),
       datasets: [{
-        data: categories.map((c) => c.cents),
-        backgroundColor: categories.map((c) => colorFor(c.category)),
-        borderColor: cssVar("--card"), borderWidth: 3,
+        data: totals, borderRadius: 3, maxBarThickness: 56,
+        backgroundColor: trend.months.map((m) => (m === current ? cssVar("--accent") : cssVar("--accent-dim"))),
       }],
     },
     options: {
-      maintainAspectRatio: false, cutout: "62%",
-      plugins: { legend: { display: false },
-        tooltip: { callbacks: { label: (ctx) => ` ${ctx.label}: ${money(ctx.parsed)}` } } },
+      maintainAspectRatio: false,
+      scales: {
+        x: { grid: { display: false } },
+        y: { beginAtZero: true, grid: { color: cssVar("--line") }, ticks: { callback: dollarTick } },
+      },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } } },
     },
   });
 }
@@ -616,16 +753,19 @@ function renderTrendChart() {
       labels: trend.months.map((m) => monthName(m, "short")),
       datasets: trend.categories.map((c) => ({
         label: prettyCategory(c), data: trend.series[c],
-        backgroundColor: colorFor(c), borderRadius: 4,
+        backgroundColor: colorFor(c), borderColor: cssVar("--card"), borderWidth: 1.5, maxBarThickness: 90,
       })),
     },
     options: {
       maintainAspectRatio: false,
       scales: {
         x: { stacked: true, grid: { display: false } },
-        y: { stacked: true, grid: { color: cssVar("--line") }, ticks: { callback: (v) => `$${(v / 100).toLocaleString("en-US")}` } },
+        y: { stacked: true, grid: { color: cssVar("--line") }, ticks: { callback: dollarTick } },
       },
-      plugins: { tooltip: { callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${money(ctx.parsed.y)}` } } },
+      plugins: {
+        legend: { position: "bottom", labels: { usePointStyle: true, pointStyle: "circle", boxWidth: 8, padding: 18 } },
+        tooltip: { callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${money(ctx.parsed.y)}` } },
+      },
     },
   });
 }
@@ -634,9 +774,12 @@ function renderTrendChart() {
 
 function showTab(tab) {
   state.tab = tab;
-  document.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === tab));
+  document.querySelectorAll(".tab").forEach((b) => {
+    if (b.dataset.tab === tab) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
   TABS.forEach((name) => { $(`#tab-${name}`).hidden = name !== tab; });
   history.replaceState(null, "", `#${tab}`);
+  updateChrome();
   renderCharts();
 }
 
@@ -703,9 +846,6 @@ $("#accounts").addEventListener("keydown", async (event) => {
     try { await saveNickname(state.editing); } catch (error) { alert(`Could not save: ${error.message}`); }
   }
 });
-
-// Chart colors come from CSS variables, so redraw when the theme flips.
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderCharts);
 
 init();
 </script>

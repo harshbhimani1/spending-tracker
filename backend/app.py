@@ -60,6 +60,7 @@ def overview(month: Month):
         _, previous_total = database.month_totals(conn, previous_month(month))
         top_merchant = database.month_top_merchant(conn, month)
         categories = database.month_categories(conn, month)
+        daily = database.month_daily(conn, month)
 
     # A month still in progress is averaged over the days elapsed so far.
     today = date.today()
@@ -76,6 +77,7 @@ def overview(month: Month):
         "daily_average_cents": round(total / days),
         "top_merchant": top_merchant,
         "categories": categories,
+        "daily": daily,
     }
 
 
