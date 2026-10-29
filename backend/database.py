@@ -118,6 +118,32 @@ CREATE TABLE IF NOT EXISTS sync_locks (
     user_id      TEXT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
     locked_until TIMESTAMPTZ NOT NULL
 );
+
+-- Supabase also publishes every table in this schema through its own REST API
+-- to anyone holding the browser-safe publishable key, which would bypass this
+-- app's sign-in checks. Only the backend (connecting as the tables' owner,
+-- which row level security doesn't apply to) should ever reach this data, so:
+-- row level security on with no policies (the API sees no rows), and no table
+-- rights at all for Supabase's API roles, now or for tables added later.
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_locks ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+       AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
+        REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+    END IF;
+END
+$$;
 """
 
 
